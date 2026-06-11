@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Taskly — Get things done</title>
+  <meta name="description" content="A beautiful, offline-first to-do app. Your tasks, organized — all stored on your device.">
+
+  <!-- PWA (relative paths so it works from a GitHub Pages subdirectory) -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#F4F4F7">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+
+  <!-- iOS home-screen install -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Taskly">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Active tab content is rendered here by app.js -->
+    <main id="view" class="view"></main>
+
+    <!-- Floating action button: quick-add a task from anywhere -->
+    <button id="fab" class="fab" aria-label="Add task"></button>
+
+    <!-- Bottom tab bar: Today / Tasks / Stats / Profile -->
+    <nav id="tabbar" class="tabbar" aria-label="Main navigation"></nav>
+
+    <!-- Toast with undo support -->
+    <div id="toast" class="toast" role="status"></div>
+  </div>
+
+  <noscript style="display:block;padding:40px;text-align:center;font-family:system-ui">
+    Taskly needs JavaScript to run. Please enable it and reload.
+  </noscript>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
