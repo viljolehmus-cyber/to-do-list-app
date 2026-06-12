@@ -88,8 +88,9 @@ the new assets.
 
 ## Notes & limitations
 
-- **Storage**: `localStorage` holds ~5 MB. Image attachments are base64, so
-  keep them small (the app rejects files over 1.5 MB).
+- **Storage**: `localStorage` holds ~5 MB. Image attachments are downscaled
+  to ≤1280px and re-encoded as JPEG before being stored as base64, so even
+  large photos stay small and saves never block the main thread.
 - **Notifications**: reminders fire while the app is open (tab or installed
   PWA). Real push notifications to a closed app require a Web Push backend,
   which is intentionally out of scope for this no-backend app.

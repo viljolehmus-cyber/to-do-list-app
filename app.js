@@ -5,6 +5,22 @@
    and wires up bottom sheets, the FAB, toasts with undo, charts and theme
    switching. All persistence goes through storage.js; all "smart" logic
    lives in suggestions.js.
+
+   PERFORMANCE NOTES
+   - Lists are never rebuilt wholesale after the first paint: a keyed
+     reconciler (reconcileTaskList) adds/removes/reorders only the rows
+     that changed, and withFlip() animates position deltas with
+     transforms (FLIP), so rows glide instead of jumping.
+   - Only transform/opacity are animated (CSS + Web Animations API).
+   - DOM reads and writes are batched: FLIP reads all rects, then
+     mutates, then reads again, then starts animations. Drag handlers
+     write styles inside requestAnimationFrame.
+   - will-change is applied only while a row/sheet is actively dragged.
+   - Scroll-blocking is avoided via CSS touch-action (pan-y on rows,
+     none on sheet grips) instead of non-passive touch listeners; the
+     only scroll-adjacent listener (resize) is passive.
+   - prefers-reduced-motion disables FLIP/WAAPI/counters here, and CSS
+     collapses its own animations.
    ========================================================================== */
 
 import { icon } from './icons.js';
@@ -43,6 +59,77 @@ function esc(s) {
 function debounce(fn, ms) {
   let t;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+/* ---------- motion language (shared with styles.css tokens) ---------- */
+
+const EASE_OUT = 'cubic-bezier(.22, 1, .36, 1)';
+const EASE_SPRING = 'cubic-bezier(.34, 1.56, .64, 1)';
+const rmQuery = matchMedia('(prefers-reduced-motion: reduce)');
+const reducedMotion = () => rmQuery.matches;
+
+/**
+ * FLIP: measure First positions, mutate the DOM, measure Last positions,
+ * then animate each surviving row by its delta using only transforms.
+ * Reads and writes are strictly batched (read-all → mutate → read-all →
+ * animate-all), never interleaved.
+ */
+function withFlip(scope, mutate) {
+  if (reducedMotion()) { mutate(); return; }
+  const before = new Map();
+  for (const el of $$('.task-item', scope)) before.set(el, el.getBoundingClientRect());
+  mutate();
+  const moves = [];
+  for (const el of $$('.task-item', scope)) {
+    const f = before.get(el);
+    if (!f) continue; // brand-new row: it has its own CSS entrance
+    const l = el.getBoundingClientRect();
+    if (!l.height) continue; // inside a hidden section
+    const dy = f.top - l.top;
+    if (Math.abs(dy) > 2) moves.push([el, dy]);
+  }
+  for (const [el, dy] of moves) {
+    el.animate(
+      [{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
+      { duration: 340, easing: EASE_OUT },
+    );
+  }
+}
+
+/** Counts the leading number in an element up from zero (stats view). */
+function countUpFrom(el) {
+  if (!el) return;
+  const m = String(el.textContent).match(/^(\d+)(.*)$/);
+  if (!m) return;
+  const target = Number(m[1]);
+  const suffix = m[2];
+  if (reducedMotion() || !target) return;
+  const t0 = performance.now();
+  const dur = 750;
+  const tick = (now) => {
+    const p = Math.min(1, (now - t0) / dur);
+    el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + suffix;
+    if (p < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/**
+ * Progress bars render with their final scaleX inline; this replays them
+ * from zero on view entry (the bar itself transitions transform in CSS).
+ */
+function animateProgressBars(root) {
+  if (reducedMotion()) return;
+  for (const bar of $$('.progressbar > i', root)) {
+    const target = bar.style.transform;
+    if (!target) continue;
+    bar.style.transition = 'none';
+    bar.style.transform = 'scaleX(0)';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      bar.style.transition = '';
+      bar.style.transform = target;
+    }));
+  }
 }
 
 /* ---------- date formatting ---------- */
@@ -114,6 +201,7 @@ const state = {
   projectId: null,              // null = all lists
   showCompleted: false,
   filters: { status: 'all', category: null, priority: null, due: 'any' },
+  refresh: null,                // current view's targeted-update function
 };
 
 function activeFilterCount() {
@@ -121,8 +209,14 @@ function activeFilterCount() {
   return (f.status !== 'all') + (f.category !== null) + (f.priority !== null) + (f.due !== 'any');
 }
 
+/** Targeted update of the current view; falls back to a full render. */
+function refreshUI() {
+  if (state.refresh) state.refresh();
+  else render();
+}
+
 /* ==========================================================================
-   Root render & tab bar
+   Root render, tab bar & view transitions
    ========================================================================== */
 
 const TABS = [
@@ -131,41 +225,96 @@ const TABS = [
   { id: 'stats',   label: 'Stats',   icon: 'chart' },
   { id: 'profile', label: 'Profile', icon: 'user'  },
 ];
+const TAB_INDEX = Object.fromEntries(TABS.map((t, i) => [t.id, i]));
 
 function render() {
+  state.refresh = null;
   const view = $('#view');
   view.className = 'view';
   if (state.tab === 'today') renderToday(view);
   else if (state.tab === 'tasks') renderTasks(view);
   else if (state.tab === 'stats') renderStats(view);
   else renderProfile(view);
-  // restart the view entrance animation
-  view.style.animation = 'none';
-  void view.offsetHeight;
-  view.style.animation = '';
-  renderTabbar();
 }
 
-function renderTabbar() {
-  $('#tabbar').innerHTML = TABS.map((t) => `
+/** Built once at boot; afterwards only classes and the glider change. */
+function buildTabbar() {
+  const bar = $('#tabbar');
+  bar.innerHTML = `<span class="tab-glider" id="tab-glider"></span>` + TABS.map((t) => `
     <button class="tab ${state.tab === t.id ? 'active' : ''}" data-tab="${t.id}">
       <span class="ind">${icon(t.icon, { size: 22 })}</span>${t.label}
     </button>`).join('');
-  $$('#tabbar .tab').forEach((b) =>
-    b.addEventListener('click', () => { state.tab = b.dataset.tab; render(); }));
+  $$('.tab', bar).forEach((b) =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab)));
 }
 
-function switchTab(tab) { state.tab = tab; render(); }
+/** Slides the active pill under the current tab (transform only). */
+function positionGlider(animate = true) {
+  const glider = $('#tab-glider');
+  const tab = $(`.tab[data-tab="${state.tab}"]`);
+  const ind = $('.ind', tab || document.body);
+  if (!glider || !tab || !ind) return;
+  const x = tab.offsetLeft + ind.offsetLeft; // batched reads…
+  const y = tab.offsetTop + ind.offsetTop;
+  if (!animate) glider.style.transition = 'none';
+  glider.style.transform = `translate(${x}px, ${y}px)`; // …then writes
+  if (!animate) {
+    void glider.offsetWidth; // flush so the next move transitions again
+    glider.style.transition = '';
+  }
+}
+
+function setActiveTab(id, animate = true) {
+  $$('#tabbar .tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === id));
+  positionGlider(animate && !reducedMotion());
+  if (animate && !reducedMotion()) {
+    $(`.tab[data-tab="${id}"] .ind`)?.animate(
+      [{ transform: 'scale(1)' }, { transform: 'scale(1.22)' }, { transform: 'scale(1)' }],
+      { duration: 340, easing: EASE_SPRING },
+    );
+  }
+}
+
+let viewAnim = null;
+
+/** Directional slide-and-fade between tabs — no hard cuts. */
+function switchTab(next) {
+  if (next === state.tab) { render(); return; }
+  const dir = TAB_INDEX[next] > TAB_INDEX[state.tab] ? 1 : -1;
+  state.tab = next;
+  setActiveTab(next);
+
+  const view = $('#view');
+  viewAnim?.cancel();
+  if (reducedMotion()) {
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  viewAnim = view.animate(
+    [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-14 * dir}px)` }],
+    { duration: 90, easing: 'ease-in' },
+  );
+  viewAnim.onfinish = () => {
+    render();
+    window.scrollTo(0, 0);
+    viewAnim = view.animate(
+      [{ opacity: 0, transform: `translateX(${22 * dir}px)` }, { opacity: 1, transform: 'none' }],
+      { duration: 250, easing: EASE_OUT },
+    );
+    viewAnim.onfinish = () => { viewAnim = null; };
+  };
+}
 
 /* ==========================================================================
-   Task row component
+   Task row component (+ keyed reconciler)
    ========================================================================== */
 
 function categoryOf(task) {
   return task.category ? db.getCategory(task.category) : null;
 }
 
-function taskRowHTML(task, i = 0) {
+function taskItemInner(task) {
   const cat = categoryOf(task);
   const checkColor = cat ? COLOR_HEX[cat.color] : '';
   const chips = [];
@@ -190,10 +339,11 @@ function taskRowHTML(task, i = 0) {
   }
 
   return `
-    <div class="task-row ${task.completed ? 'done' : ''}" data-id="${task.id}"
-         style="animation-delay:${Math.min(i * 35, 280)}ms" role="button" tabindex="0">
-      <button class="check ${task.completed ? 'checked' : ''}" aria-label="Toggle complete"
-              style="${checkColor ? `--check-c:${checkColor}` : ''}">${icon('check', { size: 15, strokeWidth: 3 })}</button>
+    <div class="swipe-action">${icon('trash', { size: 20 })}</div>
+    <div class="task-row ${task.completed ? 'done' : ''}"
+         ${checkColor ? `style="--check-c:${checkColor}"` : ''} role="button" tabindex="0">
+      <button class="check ${task.completed ? 'checked' : ''}" aria-label="Toggle complete">
+        ${icon('check', { size: 15, strokeWidth: 3 })}</button>
       <div class="task-main">
         <div class="task-title">${esc(task.title)}</div>
         ${chips.length ? `<div class="task-meta">${chips.join('')}</div>` : ''}
@@ -202,16 +352,155 @@ function taskRowHTML(task, i = 0) {
     </div>`;
 }
 
-/** Attach check / open handlers to all task rows inside `root`. */
-function bindTaskRows(root) {
-  $$('.task-row', root).forEach((row) => {
-    const id = row.dataset.id;
-    $('.check', row).addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleComplete(id, row);
-    });
-    row.addEventListener('click', () => openDetailSheet(id));
+function taskItemHTML(task, i = 0) {
+  return `<div class="task-item" data-id="${task.id}" data-u="${esc(task.updatedAt)}"
+    style="animation-delay:${Math.min(i * 35, 280)}ms">${taskItemInner(task)}</div>`;
+}
+
+function createTaskItem(task) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = taskItemHTML(task).trim();
+  const el = tpl.content.firstElementChild;
+  el.style.animationDelay = '';
+  return el;
+}
+
+/** Wire up check / open / swipe for one .task-item. */
+function bindTaskItem(item, opts = {}) {
+  const { swipe = true, beforeOpen = null } = opts;
+  const row = $('.task-row', item);
+  $('.check', row).addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (item.dataset.noClick) return;
+    if (beforeOpen) { beforeOpen(); toggleComplete(item.dataset.id, null); }
+    else toggleComplete(item.dataset.id, item);
   });
+  row.addEventListener('click', () => {
+    if (item.dataset.noClick) return; // a swipe just ended here
+    beforeOpen?.();
+    openDetailSheet(item.dataset.id);
+  });
+  if (swipe) attachSwipe(item);
+}
+
+function bindList(container, opts = {}) {
+  $$('.task-item', container).forEach((el) => bindTaskItem(el, opts));
+}
+
+/**
+ * Keyed list diff: removes stale rows, inserts new ones (with their CSS
+ * entrance), refreshes rows whose task changed (data-u = updatedAt) and
+ * reorders in place. Callers wrap it in withFlip() for the glide.
+ */
+function reconcileTaskList(container, tasks, opts = {}) {
+  const existing = new Map();
+  for (const el of [...container.children]) {
+    if (el.classList.contains('task-item')) existing.set(el.dataset.id, el);
+  }
+  const wanted = new Set(tasks.map((t) => t.id));
+  for (const [id, el] of existing) {
+    if (!wanted.has(id)) { el.remove(); existing.delete(id); }
+  }
+  let cursor = container.firstElementChild;
+  for (const task of tasks) {
+    let el = existing.get(task.id);
+    if (!el) {
+      el = createTaskItem(task);
+      el.classList.add('row-enter'); // slides in from the top
+      bindTaskItem(el, opts);
+    } else if (el.dataset.u !== task.updatedAt) {
+      el.innerHTML = taskItemInner(task);
+      el.dataset.u = task.updatedAt;
+      bindTaskItem(el, opts);
+    }
+    if (el === cursor) cursor = cursor.nextElementSibling;
+    else container.insertBefore(el, cursor);
+  }
+}
+
+/* ==========================================================================
+   Swipe-to-delete (follows the finger; transform-only)
+   ========================================================================== */
+
+function attachSwipe(item) {
+  const row = $('.task-row', item);
+  const action = $('.swipe-action', item);
+  let pid = null;
+  let startX = 0, startY = 0, dx = 0, width = 0;
+  let dragging = false, raf = 0;
+
+  row.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary || e.button !== 0) return;
+    pid = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    dx = 0;
+    dragging = false;
+  });
+
+  row.addEventListener('pointermove', (e) => {
+    if (pid === null || e.pointerId !== pid) return;
+    const mx = e.clientX - startX;
+    const my = e.clientY - startY;
+
+    if (!dragging) {
+      if (mx < -10 && Math.abs(mx) > Math.abs(my) * 1.3) {
+        dragging = true;
+        width = row.offsetWidth; // single layout read at drag start
+        row.setPointerCapture(pid);
+        row.classList.add('swiping');
+        row.style.willChange = 'transform'; // only while actively dragging
+      } else if (Math.abs(my) > 12) {
+        pid = null; // vertical intent: let native scroll win
+        return;
+      }
+    }
+    if (!dragging) return;
+
+    dx = Math.min(0, mx);
+    if (!raf) { // batch style writes into one frame
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        row.style.transform = `translateX(${dx}px)`;
+        action.style.opacity = String(Math.min(1, -dx / 90));
+      });
+    }
+  });
+
+  const end = (e) => {
+    if (pid === null || e.pointerId !== pid) return;
+    pid = null;
+    if (!dragging) return;
+    dragging = false;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    row.style.willChange = '';
+
+    // swallow the click this gesture would otherwise fire
+    item.dataset.noClick = '1';
+    setTimeout(() => delete item.dataset.noClick, 350);
+
+    if (dx < -width * 0.42) {
+      // committed: glide the row off, then delete (with undo)
+      const out = row.animate(
+        [{ transform: `translateX(${dx}px)` }, { transform: `translateX(${-width - 40}px)` }],
+        { duration: 170, easing: 'ease-in', fill: 'forwards' },
+      );
+      out.onfinish = () => deleteTaskWithUndo(item.dataset.id);
+    } else {
+      // spring back
+      row.classList.remove('swiping');
+      row.style.transform = '';
+      action.style.opacity = '';
+      if (!reducedMotion()) {
+        row.animate(
+          [{ transform: `translateX(${dx}px)` }, { transform: 'translateX(0)' }],
+          { duration: 300, easing: EASE_OUT },
+        );
+      }
+    }
+  };
+  row.addEventListener('pointerup', end);
+  row.addEventListener('pointercancel', end);
 }
 
 /* ==========================================================================
@@ -242,46 +531,59 @@ function createNextOccurrence(task) {
   };
 }
 
-function toggleComplete(id, rowEl) {
+function toggleComplete(id, itemEl) {
   const task = db.getTask(id);
   if (!task) return;
 
-  if (!task.completed) {
-    // play the check + fade animation before re-rendering
-    if (rowEl) {
-      $('.check', rowEl).classList.add('checked');
-      rowEl.classList.add('completing');
-    }
-    setTimeout(() => {
-      task.completed = true;
-      task.completedAt = new Date().toISOString();
-      db.saveTask(task);
-
-      // automation: recurring tasks immediately spawn their next occurrence
-      let next = null;
-      if (task.recurrence) {
-        next = createNextOccurrence(task);
-        db.saveTask(next);
-      }
-      render();
-      showToast(
-        next ? `Done! Next one ${fmtDueLabel(next).toLowerCase()}` : 'Task completed',
-        {
-          undo: () => {
-            task.completed = false;
-            task.completedAt = null;
-            db.saveTask(task);
-            if (next) db.deleteTask(next.id);
-            render();
-          },
-        },
-      );
-    }, rowEl ? 420 : 0);
-  } else {
+  if (task.completed) {
     task.completed = false;
     task.completedAt = null;
     db.saveTask(task);
-    render();
+    refreshUI();
+    return;
+  }
+
+  const finish = () => {
+    task.completed = true;
+    task.completedAt = new Date().toISOString();
+    db.saveTask(task);
+
+    // automation: recurring tasks immediately spawn their next occurrence
+    let next = null;
+    if (task.recurrence) {
+      next = createNextOccurrence(task);
+      db.saveTask(next);
+    }
+    refreshUI();
+    showToast(
+      next ? `Done! Next one ${fmtDueLabel(next).toLowerCase()}` : 'Task completed',
+      {
+        undo: () => {
+          task.completed = false;
+          task.completedAt = null;
+          db.saveTask(task);
+          if (next) db.deleteTask(next.id);
+          refreshUI();
+        },
+      },
+    );
+  };
+
+  if (itemEl && !reducedMotion()) {
+    // 1. checkmark draws itself + strike-through + brief tinted highlight
+    const row = $('.task-row', itemEl);
+    $('.check', row).classList.add('checked');
+    row.classList.add('done', 'flash');
+    // 2. then the row fades/scales out and FLIP glides the list closed
+    setTimeout(() => {
+      const exit = itemEl.animate(
+        [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.94) translateY(-4px)' }],
+        { duration: 200, easing: 'ease-in', fill: 'forwards' },
+      );
+      exit.onfinish = finish;
+    }, 620);
+  } else {
+    finish();
   }
 }
 
@@ -289,14 +591,14 @@ function deleteTaskWithUndo(id) {
   const copy = db.getTask(id);
   if (!copy) return;
   db.deleteTask(id);
-  render();
+  refreshUI();
   showToast('Task deleted', {
-    undo: () => { db.saveTask(copy); render(); },
+    undo: () => { db.saveTask(copy); refreshUI(); },
   });
 }
 
 /* ==========================================================================
-   Toast (with undo)
+   Toast (slides in, pauses, slides out — with undo)
    ========================================================================== */
 
 let toastTimer = null;
@@ -323,7 +625,7 @@ function hideToast() {
 }
 
 /* ==========================================================================
-   Bottom sheets — generic helper
+   Bottom sheets — slide up, backdrop fade, drag-to-dismiss
    ========================================================================== */
 
 function openSheet(html) {
@@ -331,21 +633,107 @@ function openSheet(html) {
   backdrop.className = 'sheet-backdrop';
   const sheet = document.createElement('div');
   sheet.className = 'sheet';
-  sheet.innerHTML = `<div class="sheet-handle"></div>${html}`;
+  sheet.innerHTML = `<div class="sheet-grip"><div class="sheet-handle"></div></div>${html}`;
   document.body.append(backdrop, sheet);
   requestAnimationFrame(() => {
     backdrop.classList.add('show');
     sheet.classList.add('show');
   });
 
-  const close = () => {
-    backdrop.classList.remove('show');
-    sheet.classList.remove('show');
-    setTimeout(() => { backdrop.remove(); sheet.remove(); }, 360);
+  let closed = false;
+  /** @param {number|null} fromY  current drag offset when dismissed by drag */
+  const close = (fromY = null) => {
+    if (closed) return;
+    closed = true;
+    backdrop.classList.remove('dragging', 'show');
+    backdrop.style.opacity = '';
+    if (fromY !== null && !reducedMotion()) {
+      // finish the slide from wherever the finger let go
+      sheet.classList.add('dragging'); // transition off; WAAPI takes over
+      const travel = sheet.offsetHeight + 60;
+      const slide = sheet.animate(
+        [{ transform: `translateY(${fromY}px)` }, { transform: `translateY(${travel}px)` }],
+        { duration: 230, easing: 'ease-in', fill: 'forwards' },
+      );
+      slide.onfinish = () => { backdrop.remove(); sheet.remove(); };
+    } else {
+      sheet.classList.remove('dragging', 'show');
+      sheet.style.transform = '';
+      setTimeout(() => { backdrop.remove(); sheet.remove(); }, 400);
+    }
   };
-  backdrop.addEventListener('click', close);
-  $('.sheet-close', sheet)?.addEventListener('click', close);
+
+  backdrop.addEventListener('click', () => close());
+  $('.sheet-close', sheet)?.addEventListener('click', () => close());
+  makeSheetDraggable(sheet, backdrop, close);
   return { sheet, close };
+}
+
+/**
+ * Drag-to-dismiss from the grip/handle and the title row. The sheet tracks
+ * the finger 1:1 (transition disabled while dragging, writes batched in
+ * rAF) and either commits (distance or velocity) or springs back.
+ * The grip areas have CSS touch-action:none, so no non-passive touch
+ * listeners are needed anywhere.
+ */
+function makeSheetDraggable(sheet, backdrop, close) {
+  let active = false;
+  let startY = 0, dy = 0, height = 0;
+  let lastY = 0, lastT = 0, vel = 0, raf = 0;
+
+  const move = (e) => {
+    if (!active) return;
+    dy = Math.max(0, e.clientY - startY);
+    const now = performance.now();
+    if (now - lastT > 0) vel = (e.clientY - lastY) / (now - lastT); // px per ms
+    lastY = e.clientY;
+    lastT = now;
+    if (!raf) {
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        sheet.style.transform = `translateY(${dy}px)`;
+        backdrop.style.opacity = String(Math.max(0, 1 - dy / height));
+      });
+    }
+  };
+
+  const up = (e) => {
+    if (!active) return;
+    active = false;
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    sheet.style.willChange = '';
+    backdrop.classList.remove('dragging');
+
+    if (dy > 120 || vel > 0.55) {
+      close(dy);
+    } else {
+      // spring back via the sheet's own CSS transition
+      sheet.classList.remove('dragging');
+      sheet.style.transform = '';
+      backdrop.style.opacity = '';
+    }
+    e.target.releasePointerCapture?.(e.pointerId);
+  };
+
+  for (const grip of $$('.sheet-grip, .sheet-title-row', sheet)) {
+    grip.addEventListener('pointerdown', (e) => {
+      if (!e.isPrimary || e.target.closest('button')) return; // keep ✕ tappable
+      active = true;
+      startY = e.clientY;
+      lastY = e.clientY;
+      lastT = performance.now();
+      dy = 0;
+      vel = 0;
+      height = sheet.offsetHeight; // single layout read per drag
+      sheet.classList.add('dragging');
+      backdrop.classList.add('dragging');
+      sheet.style.willChange = 'transform'; // only while dragging
+      grip.setPointerCapture(e.pointerId);
+    });
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  }
 }
 
 function sheetHeader(title) {
@@ -363,12 +751,27 @@ function openConfirmSheet(title, message, confirmLabel, onConfirm) {
     <div class="spacer-8"></div>
     <button class="btn ghost block" id="cf-no">Cancel</button>`);
   $('#cf-yes', sheet).addEventListener('click', () => { close(); onConfirm(); });
-  $('#cf-no', sheet).addEventListener('click', close);
+  $('#cf-no', sheet).addEventListener('click', () => close());
 }
 
 /* ==========================================================================
    Task form sheet (add & edit)
    ========================================================================== */
+
+/**
+ * Downscales and re-encodes an image before it is kept as base64, so
+ * localStorage writes (which are synchronous) stay small and fast.
+ */
+async function compressImage(file, maxDim = 1280, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL('image/jpeg', quality);
+}
 
 function reminderOffsetMinutes(task) {
   if (!task?.reminderAt || !task?.dueDate) return '';
@@ -378,7 +781,6 @@ function reminderOffsetMinutes(task) {
 
 function openTaskSheet(existing = null, defaults = {}) {
   const isEdit = !!existing;
-  const categories = db.getCategories();
   const projects = db.getProjects();
   const allTasks = db.getTasks();
 
@@ -502,21 +904,27 @@ function openTaskSheet(existing = null, defaults = {}) {
     $('#tf-add-file', sheet).addEventListener('click', () => $('#tf-file', sheet).click());
   }
   renderThumbs();
-  $('#tf-file', sheet).addEventListener('change', (e) => {
+  $('#tf-file', sheet).addEventListener('change', async (e) => {
     const file = e.target.files[0];
+    e.target.value = '';
     if (!file) return;
-    // Images are stored as base64 in localStorage (~5MB quota) — keep them small.
-    if (file.size > 1.5 * 1024 * 1024) {
-      showToast('Image too large — please pick one under 1.5 MB');
+    if (file.size > 12 * 1024 * 1024) {
+      showToast('Image too large — please pick one under 12 MB');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      sel.attachments.push({ id: db.uid(), name: file.name, dataUrl: reader.result });
+    try {
+      const dataUrl = await compressImage(file);
+      sel.attachments.push({ id: db.uid(), name: file.name, dataUrl });
       renderThumbs();
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
+    } catch {
+      // some formats can't be decoded by createImageBitmap — store as-is
+      const reader = new FileReader();
+      reader.onload = () => {
+        sel.attachments.push({ id: db.uid(), name: file.name, dataUrl: reader.result });
+        renderThumbs();
+      };
+      reader.readAsDataURL(file);
+    }
   });
 
   /* --- smart suggestions while typing --- */
@@ -582,7 +990,7 @@ function openTaskSheet(existing = null, defaults = {}) {
     if (reminderAt && notify.permission() === 'default') notify.requestPermission();
 
     close();
-    render();
+    refreshUI();
     showToast(isEdit ? 'Task updated' : 'Task added');
   });
 
@@ -648,7 +1056,7 @@ function openListsSheet() {
       ${db.getProjects().map((p) => {
         const count = tasks.filter((t) => t.projectId === p.id && !t.completed).length;
         return `
-        <div class="task-row" data-pick="${p.id}" style="animation:none">
+        <div class="task-row" data-pick="${p.id}">
           <span class="dot c-${p.color}" style="width:12px;height:12px"></span>
           <div class="task-main"><div class="task-title">${esc(p.name)}</div></div>
           <span class="meta-chip">${count} open</span>
@@ -669,9 +1077,8 @@ function openListsSheet() {
   }));
   $$('#ls-rows [data-pick]', sheet).forEach((row) => row.addEventListener('click', () => {
     state.projectId = row.dataset.pick;
-    state.tab = 'tasks';
     close();
-    render();
+    switchTab('tasks');
   }));
   $$('#ls-rows [data-del]', sheet).forEach((b) => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -688,9 +1095,8 @@ function openListsSheet() {
     if (!name) { $('#nl-name', sheet).focus(); return; }
     const proj = db.saveProject({ name, color });
     state.projectId = proj.id;
-    state.tab = 'tasks';
     close();
-    render();
+    switchTab('tasks');
   });
 }
 
@@ -826,12 +1232,12 @@ function openFiltersSheet() {
   $('#fl-reset', sheet).addEventListener('click', () => {
     state.filters = { status: 'all', category: null, priority: null, due: 'any' };
     close();
-    render();
+    refreshUI();
   });
   $('#fl-apply', sheet).addEventListener('click', () => {
     state.filters = draft;
     close();
-    render();
+    refreshUI();
   });
 }
 
@@ -873,11 +1279,11 @@ function openBellSheet() {
     ${overdue.length ? `
       <div class="section-head"><h2>${icon('alert', { size: 18 })} Overdue</h2>
         <span class="count">${overdue.length}</span></div>
-      <div class="task-list" id="bl-overdue">${overdue.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}
+      <div class="task-list" id="bl-overdue">${overdue.map((t, i) => taskItemHTML(t, i)).join('')}</div>` : ''}
     ${dueSoon.length ? `
       <div class="section-head"><h2>${icon('clock', { size: 18 })} Due soon</h2>
         <span class="count">${dueSoon.length}</span></div>
-      <div class="task-list" id="bl-soon">${dueSoon.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}
+      <div class="task-list" id="bl-soon">${dueSoon.map((t, i) => taskItemHTML(t, i)).join('')}</div>` : ''}
     ${!overdue.length && !dueSoon.length ? `
       <div class="empty-card">
         <div class="ring">${icon('check-circle', { size: 28 })}</div>
@@ -890,15 +1296,12 @@ function openBellSheet() {
     showToast(notify.permission() === 'granted'
       ? 'Notifications enabled' : 'Notifications were not enabled');
   });
-  // open task details from inside the sheet
-  $$('.task-row', sheet).forEach((row) => {
-    $('.check', row).addEventListener('click', (e) => {
-      e.stopPropagation();
-      close();
-      toggleComplete(row.dataset.id, null);
-    });
-    row.addEventListener('click', () => { close(); openDetailSheet(row.dataset.id); });
-  });
+  // rows inside the sheet close it first, then act on the main view
+  const opts = { swipe: false, beforeOpen: () => close() };
+  for (const listSel of ['#bl-overdue', '#bl-soon']) {
+    const list = $(listSel, sheet);
+    if (list) bindList(list, opts);
+  }
 }
 
 /* ==========================================================================
@@ -914,16 +1317,9 @@ function greetingWord() {
 }
 
 function renderToday(view) {
-  const tasks = db.getTasks();
-  const { overdue, today, suggested, doneToday } = smart.buildToday(tasks);
   const name = db.getSettings().name.trim();
-  const openToday = today.length;
-  const totalToday = openToday + doneToday.length;
-  const pct = totalToday ? Math.round((doneToday.length / totalToday) * 100) : 0;
-  const hasAlerts = overdue.length + smart.getDueSoonTasks(tasks).length > 0;
   const dateLabel = new Date().toLocaleDateString('en-US',
     { weekday: 'long', month: 'long', day: 'numeric' });
-  const nothingOpen = !overdue.length && !openToday && !suggested.length;
 
   view.innerHTML = `
     <div class="topbar">
@@ -933,7 +1329,7 @@ function renderToday(view) {
       </div>
       <div class="topbar-actions">
         <button class="icon-btn" id="td-bell" aria-label="Notifications">
-          ${icon('bell', { size: 20 })}${hasAlerts ? '<span class="alert-dot"></span>' : ''}
+          ${icon('bell', { size: 20 })}<span class="alert-dot" id="td-dot" hidden></span>
         </button>
         <div class="avatar">${name ? esc(name[0].toUpperCase()) : icon('user', { size: 20 })}</div>
       </div>
@@ -945,32 +1341,32 @@ function renderToday(view) {
 
     <div class="hero-card">
       <div class="hero-kicker">Today's progress</div>
-      <div class="hero-title">${
-        nothingOpen && !totalToday ? 'A fresh start.<br>Plan something great.' :
-        openToday === 0 && totalToday > 0 ? 'All done for today.<br>You crushed it!' :
-        `You have <br>${openToday + overdue.length} task${openToday + overdue.length === 1 ? '' : 's'} to go`}</div>
+      <div class="hero-title" id="td-hero-title"></div>
       <div class="hero-stats">
-        <div class="hero-stat"><div class="n">${doneToday.length}</div><div class="l">Done</div></div>
-        <div class="hero-stat"><div class="n">${openToday}</div><div class="l">Open today</div></div>
-        <div class="hero-stat"><div class="n">${overdue.length}</div><div class="l">Overdue</div></div>
+        <div class="hero-stat"><div class="n" id="td-n-done">0</div><div class="l">Done</div></div>
+        <div class="hero-stat"><div class="n" id="td-n-open">0</div><div class="l">Open today</div></div>
+        <div class="hero-stat"><div class="n" id="td-n-over">0</div><div class="l">Overdue</div></div>
       </div>
-      <div class="progressbar"><i style="width:${pct}%"></i></div>
+      <div class="progressbar"><i id="td-progress"></i></div>
     </div>
 
-    ${overdue.length ? `
-      <div class="section-head"><h2>Overdue</h2><span class="count">${overdue.length}</span></div>
-      <div class="task-list" id="td-overdue">${overdue.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}
+    <section id="td-sec-overdue" hidden>
+      <div class="section-head"><h2>Overdue</h2><span class="count" id="td-c-overdue"></span></div>
+      <div class="task-list" id="td-l-overdue"></div>
+    </section>
 
-    ${openToday ? `
-      <div class="section-head"><h2>Today</h2><span class="count">${openToday}</span></div>
-      <div class="task-list" id="td-today">${today.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}
+    <section id="td-sec-today" hidden>
+      <div class="section-head"><h2>Today</h2><span class="count" id="td-c-today"></span></div>
+      <div class="task-list" id="td-l-today"></div>
+    </section>
 
-    ${suggested.length ? `
+    <section id="td-sec-next" hidden>
       <div class="section-head"><h2>${icon('sparkles', { size: 17 })} Up next</h2>
         <button class="link" id="td-all">See all</button></div>
-      <div class="task-list" id="td-suggested">${suggested.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}
+      <div class="task-list" id="td-l-next"></div>
+    </section>
 
-    ${nothingOpen ? `
+    <div id="td-empty" hidden>
       <div class="spacer-16"></div>
       <div class="empty-card">
         <div class="ring">${icon('sparkles', { size: 28 })}</div>
@@ -978,17 +1374,85 @@ function renderToday(view) {
         <p>No urgent tasks right now. Add something new or enjoy the calm.</p>
         <div class="spacer-16"></div>
         <button class="btn gradient" id="td-add">${icon('plus', { size: 17 })}New Task</button>
-      </div>` : ''}
+      </div>
+    </div>
 
-    ${doneToday.length ? `
-      <div class="section-head"><h2>Done today</h2><span class="count">${doneToday.length}</span></div>
-      <div class="task-list" id="td-done">${doneToday.slice(0, 5).map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}`;
+    <section id="td-sec-done" hidden>
+      <div class="section-head"><h2>Done today</h2><span class="count" id="td-c-done"></span></div>
+      <div class="task-list" id="td-l-done"></div>
+    </section>`;
 
-  bindTaskRows(view);
+  const els = {
+    heroTitle: $('#td-hero-title', view),
+    nDone: $('#td-n-done', view),
+    nOpen: $('#td-n-open', view),
+    nOver: $('#td-n-over', view),
+    progress: $('#td-progress', view),
+    dot: $('#td-dot', view),
+    empty: $('#td-empty', view),
+    sections: {
+      overdue: [$('#td-sec-overdue', view), $('#td-l-overdue', view), $('#td-c-overdue', view)],
+      today:   [$('#td-sec-today', view),   $('#td-l-today', view),   $('#td-c-today', view)],
+      next:    [$('#td-sec-next', view),    $('#td-l-next', view),    null],
+      done:    [$('#td-sec-done', view),    $('#td-l-done', view),    $('#td-c-done', view)],
+    },
+  };
+
+  /** Targeted update: only rows/labels that changed are touched. */
+  function refresh({ flip = true } = {}) {
+    const tasks = db.getTasks();
+    const { overdue, today, suggested, doneToday } = smart.buildToday(tasks);
+    const lists = {
+      overdue, today, next: suggested, done: doneToday.slice(0, 5),
+    };
+    const openToday = today.length;
+    const totalToday = openToday + doneToday.length;
+    const pct = totalToday ? Math.round((doneToday.length / totalToday) * 100) : 0;
+    const nothingOpen = !overdue.length && !openToday && !suggested.length;
+
+    const apply = () => {
+      els.heroTitle.innerHTML =
+        nothingOpen && !totalToday ? 'A fresh start.<br>Plan something great.' :
+        openToday === 0 && !overdue.length && totalToday > 0 ? 'All done for today.<br>You crushed it!' :
+        `You have <br>${openToday + overdue.length} task${openToday + overdue.length === 1 ? '' : 's'} to go`;
+      els.nDone.textContent = doneToday.length;
+      els.nOpen.textContent = openToday;
+      els.nOver.textContent = overdue.length;
+      els.progress.style.transform = `scaleX(${pct / 100})`;
+      els.dot.hidden = overdue.length + smart.getDueSoonTasks(tasks).length === 0;
+      els.empty.hidden = !nothingOpen;
+      for (const [key, [sec, list, count]] of Object.entries(els.sections)) {
+        sec.hidden = lists[key].length === 0;
+        if (count) count.textContent = lists[key].length;
+        reconcileTaskList(list, lists[key]);
+      }
+    };
+    if (flip) withFlip(view, apply); else apply();
+  }
+
+  // initial fill with a staggered entrance, then targeted updates only
+  {
+    const tasks = db.getTasks();
+    const { overdue, today, suggested, doneToday } = smart.buildToday(tasks);
+    let i = 0;
+    const fill = (list, items) => {
+      list.innerHTML = items.map((t) => taskItemHTML(t, i++)).join('');
+      bindList(list);
+    };
+    fill(els.sections.overdue[1], overdue);
+    fill(els.sections.today[1], today);
+    fill(els.sections.next[1], suggested);
+    fill(els.sections.done[1], doneToday.slice(0, 5));
+    refresh({ flip: false });
+    [els.nDone, els.nOpen, els.nOver].forEach(countUpFrom);
+    animateProgressBars(view);
+  }
+  state.refresh = refresh;
+
   $('#td-bell', view).addEventListener('click', openBellSheet);
   $('#td-search', view).addEventListener('click', () => {
     switchTab('tasks');
-    setTimeout(() => $('#ts-search')?.focus(), 80);
+    setTimeout(() => $('#ts-search')?.focus(), 380);
   });
   $('#td-all', view)?.addEventListener('click', () => switchTab('tasks'));
   $('#td-add', view)?.addEventListener('click', () => openTaskSheet(null, { dueDate: smart.todayStr() }));
@@ -997,6 +1461,25 @@ function renderToday(view) {
 /* ==========================================================================
    View: Tasks
    ========================================================================== */
+
+function tasksViewData() {
+  let tasks = db.getTasks();
+  if (state.projectId) tasks = tasks.filter((t) => t.projectId === state.projectId);
+  tasks = applyFilters(tasks);
+
+  const open = tasks.filter((t) => !t.completed).sort((a, b) => {
+    const od = smart.isOverdue(b) - smart.isOverdue(a);
+    if (od) return od;
+    const da = a.dueDate || '9999';
+    const dbb = b.dueDate || '9999';
+    if (da !== dbb) return da < dbb ? -1 : 1;
+    const pr = { high: 0, medium: 1, low: 2 };
+    return (pr[a.priority] ?? 1) - (pr[b.priority] ?? 1);
+  });
+  const done = tasks.filter((t) => t.completed)
+    .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
+  return { open, done };
+}
 
 function renderTasks(view) {
   const projects = db.getProjects();
@@ -1011,9 +1494,8 @@ function renderTasks(view) {
         ${icon('search', { size: 19 })}
         <input id="ts-search" placeholder="Search tasks…" value="${esc(state.search)}" autocomplete="off">
       </div>
-      <button class="filter-btn ${activeFilterCount() ? 'on' : ''}" id="ts-filter" aria-label="Filters">
-        ${icon('sliders', { size: 20 })}
-        ${activeFilterCount() ? `<span class="count">${activeFilterCount()}</span>` : ''}
+      <button class="filter-btn" id="ts-filter" aria-label="Filters">
+        ${icon('sliders', { size: 20 })}<span class="count" id="ts-fcount" hidden></span>
       </button>
     </div>
 
@@ -1025,63 +1507,90 @@ function renderTasks(view) {
       <button class="pill" id="ts-lists">${icon('plus', { size: 14 })}List</button>
     </div>
 
-    <div id="ts-area"></div>`;
+    <div class="task-list" id="ts-open"></div>
+    <div id="ts-empty" hidden>
+      <div class="empty-card">
+        <div class="ring">${icon('inbox', { size: 28 })}</div>
+        <h3 id="ts-empty-h"></h3><p id="ts-empty-p"></p>
+      </div>
+    </div>
+    <div id="ts-done-sec" hidden>
+      <div class="section-head">
+        <h2>Completed</h2>
+        <button class="link" id="ts-toggle-done"></button>
+      </div>
+      <div class="task-list" id="ts-done"></div>
+    </div>`;
 
-  function renderListArea() {
-    let tasks = db.getTasks();
-    if (state.projectId) tasks = tasks.filter((t) => t.projectId === state.projectId);
-    tasks = applyFilters(tasks);
+  const els = {
+    sub: $('#ts-sub', view),
+    open: $('#ts-open', view),
+    empty: $('#ts-empty', view),
+    emptyH: $('#ts-empty-h', view),
+    emptyP: $('#ts-empty-p', view),
+    doneSec: $('#ts-done-sec', view),
+    doneList: $('#ts-done', view),
+    toggle: $('#ts-toggle-done', view),
+    filterBtn: $('#ts-filter', view),
+    fcount: $('#ts-fcount', view),
+  };
 
-    const open = tasks.filter((t) => !t.completed).sort((a, b) => {
-      const od = smart.isOverdue(b) - smart.isOverdue(a);
-      if (od) return od;
-      const da = a.dueDate || '9999';
-      const dbb = b.dueDate || '9999';
-      if (da !== dbb) return da < dbb ? -1 : 1;
-      const pr = { high: 0, medium: 1, low: 2 };
-      return (pr[a.priority] ?? 1) - (pr[b.priority] ?? 1);
-    });
-    const done = tasks.filter((t) => t.completed)
-      .sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || ''));
-
-    $('#ts-sub').textContent = `${open.length} open · ${done.length} completed`;
-
-    const area = $('#ts-area', view);
-    area.innerHTML = `
-      ${open.length ? `<div class="task-list">${open.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : `
-        <div class="empty-card">
-          <div class="ring">${icon('inbox', { size: 28 })}</div>
-          <h3>${state.search || activeFilterCount() ? 'No matching tasks' : 'Nothing here yet'}</h3>
-          <p>${state.search || activeFilterCount()
-            ? 'Try changing your search or filters.'
-            : 'Tap the + button to add your first task.'}</p>
-        </div>`}
-      ${done.length ? `
-        <div class="section-head">
-          <h2>Completed</h2>
-          <button class="link" id="ts-toggle-done">${state.showCompleted ? 'Hide' : `Show (${done.length})`}</button>
-        </div>
-        ${state.showCompleted ? `<div class="task-list">${done.map((t, i) => taskRowHTML(t, i)).join('')}</div>` : ''}` : ''}`;
-
-    bindTaskRows(area);
-    $('#ts-toggle-done', area)?.addEventListener('click', () => {
-      state.showCompleted = !state.showCompleted;
-      renderListArea();
-    });
+  /** Targeted update — search/filter/toggle never rebuild untouched rows. */
+  function refresh({ flip = true } = {}) {
+    const { open, done } = tasksViewData();
+    const apply = () => {
+      reconcileTaskList(els.open, open);
+      els.empty.hidden = open.length > 0;
+      if (!open.length) {
+        const filtered = !!(state.search.trim() || activeFilterCount());
+        els.emptyH.textContent = filtered ? 'No matching tasks' : 'Nothing here yet';
+        els.emptyP.textContent = filtered
+          ? 'Try changing your search or filters.'
+          : 'Tap the + button to add your first task.';
+      }
+      els.doneSec.hidden = done.length === 0;
+      els.toggle.textContent = state.showCompleted ? 'Hide' : `Show (${done.length})`;
+      reconcileTaskList(els.doneList, state.showCompleted ? done : []);
+      els.sub.textContent = `${open.length} open · ${done.length} completed`;
+      const n = activeFilterCount();
+      els.filterBtn.classList.toggle('on', n > 0);
+      els.fcount.hidden = n === 0;
+      els.fcount.textContent = n;
+    };
+    if (flip) withFlip(view, apply); else apply();
   }
-  renderListArea();
 
-  // live search re-renders only the list, keeping the input focused
+  // initial fill with a staggered entrance, then targeted updates only
+  {
+    const { open, done } = tasksViewData();
+    els.open.innerHTML = open.map((t, i) => taskItemHTML(t, i)).join('');
+    bindList(els.open);
+    if (state.showCompleted) {
+      els.doneList.innerHTML = done.map((t, i) => taskItemHTML(t, i)).join('');
+      bindList(els.doneList);
+    }
+    refresh({ flip: false });
+  }
+  state.refresh = refresh;
+
+  // live search re-filters with targeted updates; input keeps focus
   $('#ts-search', view).addEventListener('input', debounce((e) => {
     state.search = e.target.value;
-    renderListArea();
-  }, 180));
+    refresh();
+  }, 150));
+
+  els.toggle.addEventListener('click', () => {
+    state.showCompleted = !state.showCompleted;
+    refresh();
+  });
 
   $('#ts-filter', view).addEventListener('click', openFiltersSheet);
   $('#ts-lists', view).addEventListener('click', openListsSheet);
   $$('#ts-projects [data-proj]', view).forEach((b) => b.addEventListener('click', () => {
     state.projectId = b.dataset.proj || null;
-    render();
+    $$('#ts-projects [data-proj]', view).forEach((p) =>
+      p.classList.toggle('active', (p.dataset.proj || null) === state.projectId));
+    refresh();
   }));
 }
 
@@ -1120,7 +1629,9 @@ function calcStreak(tasks) {
   return streak;
 }
 
-/* --- chart builders (pure SVG, no libraries) --- */
+/* --- chart builders (pure SVG, no libraries) ---
+   Bars grow with a staggered scaleY animation (transform-only, see
+   .chart-bar in styles.css); the line draws via pathLength/dashoffset. */
 
 function barChartSVG(data) {
   const W = 360, H = 170, top = 26, bottom = 30;
@@ -1134,12 +1645,11 @@ function barChartSVG(data) {
     const y = H - bottom - h;
     const color = d.count === 0 ? 'var(--surface-2)' : CHART_PALETTE[i % CHART_PALETTE.length];
     return `
-      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}"
-            rx="${Math.min(9, barW / 2)}" fill="${color}">
-        <animate attributeName="height" from="0" to="${h.toFixed(1)}" dur="0.5s" fill="freeze"/>
-        <animate attributeName="y" from="${H - bottom}" to="${y.toFixed(1)}" dur="0.5s" fill="freeze"/>
-      </rect>
-      ${d.count ? `<text class="bar-value" x="${(x + barW / 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" text-anchor="middle">${d.count}</text>` : ''}
+      <rect class="chart-bar" style="animation-delay:${i * 60}ms"
+            x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}"
+            rx="${Math.min(9, barW / 2)}" fill="${color}"/>
+      ${d.count ? `<text class="bar-value" style="animation-delay:${i * 60 + 280}ms"
+            x="${(x + barW / 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" text-anchor="middle">${d.count}</text>` : ''}
       <text class="bar-label" x="${(x + barW / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle">${d.label}</text>`;
   }).join('');
 
@@ -1171,7 +1681,8 @@ function lineChartSVG(data) {
   const labels = data.map((d, i) => i % 2 === 0
     ? `<text class="bar-label" x="${(pad + i * stepX).toFixed(1)}" y="${H - 8}" text-anchor="middle">${d.label}</text>` : '').join('');
   const dots = pts.map(([x, y], i) => data[i].count
-    ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#5B6CFF"/>` : '').join('');
+    ? `<circle class="line-dot" style="animation-delay:${400 + i * 35}ms"
+         cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#5B6CFF"/>` : '').join('');
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Activity line chart">
     <defs>
@@ -1183,8 +1694,9 @@ function lineChartSVG(data) {
         <stop offset="0%" stop-color="#5B6CFF"/><stop offset="100%" stop-color="#9D6BFF"/>
       </linearGradient>
     </defs>
-    <path d="${area}" fill="url(#lc-fill)"/>
-    <path d="${path}" fill="none" stroke="url(#lc-stroke)" stroke-width="3" stroke-linecap="round"/>
+    <path class="line-area" d="${area}" fill="url(#lc-fill)"/>
+    <path class="line-path" pathLength="1" d="${path}" fill="none" stroke="url(#lc-stroke)"
+          stroke-width="3" stroke-linecap="round"/>
     ${dots}${labels}</svg>`;
 }
 
@@ -1217,7 +1729,9 @@ function renderStats(view) {
           <span class="name"><span class="dot c-${c.color}"></span>${esc(c.name)}</span>
           <span class="pct">${completed}/${catTasks.length} · ${pct}%</span>
         </div>
-        <div class="progressbar subtle"><i style="width:${pct}%;background:${COLOR_HEX[c.color]}"></i></div>
+        <div class="progressbar subtle">
+          <i style="transform:scaleX(${pct / 100});background:${COLOR_HEX[c.color]}"></i>
+        </div>
       </div>`;
   }).join('');
 
@@ -1228,9 +1742,9 @@ function renderStats(view) {
 
     <div class="hero-card cool">
       <div class="hero-kicker">This week</div>
-      <div class="hero-title">${doneThisWeek} task${doneThisWeek === 1 ? '' : 's'} completed</div>
+      <div class="hero-title"><span id="st-week">${doneThisWeek}</span> task${doneThisWeek === 1 ? '' : 's'} completed</div>
       <div class="hero-sub">${rate}% of everything on your plate is done</div>
-      <div class="progressbar"><i style="width:${rate}%"></i></div>
+      <div class="progressbar"><i style="transform:scaleX(${rate / 100})"></i></div>
     </div>
 
     <div class="stats-grid">
@@ -1258,6 +1772,11 @@ function renderStats(view) {
         <div class="sub">Completion per category</div>
         <div class="cat-progress">${catRows}</div>
       </div>` : ''}`;
+
+  // numbers count up from zero; bars/lines animate via CSS (see styles.css)
+  $$('.stat-card .n', view).forEach(countUpFrom);
+  countUpFrom($('#st-week', view));
+  animateProgressBars(view);
 }
 
 /* ==========================================================================
@@ -1339,7 +1858,7 @@ function renderProfile(view) {
     <div class="settings-group">
       <div class="settings-row">
         <div class="ico" style="background:var(--blue-soft);color:var(--blue)">${icon('info', { size: 18 })}</div>
-        <div class="grow">Taskly v1.0
+        <div class="grow">Taskly v1.1
           <span class="sub">Offline-first PWA · your data never leaves this device</span>
         </div>
       </div>
@@ -1410,11 +1929,23 @@ function renderProfile(view) {
 function init() {
   db.ensureSeed();
   applyTheme();
+  buildTabbar();
 
-  $('#fab').innerHTML = icon('plus', { size: 26, strokeWidth: 2.5 });
-  $('#fab').addEventListener('click', () => openTaskSheet());
+  const fab = $('#fab');
+  fab.innerHTML = icon('plus', { size: 26, strokeWidth: 2.5 });
+  fab.addEventListener('click', () => {
+    if (!reducedMotion()) {
+      fab.animate(
+        [{ transform: 'scale(1)' }, { transform: 'scale(.84)' }, { transform: 'scale(1)' }],
+        { duration: 280, easing: EASE_SPRING },
+      );
+    }
+    openTaskSheet();
+  });
 
   render();
+  requestAnimationFrame(() => positionGlider(false));
+  window.addEventListener('resize', () => positionGlider(false), { passive: true });
 
   // local reminder loop (see notifications.js for the closed-app limitation)
   notify.init(db.getTasks);

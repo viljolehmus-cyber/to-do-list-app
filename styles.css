@@ -5,13 +5,23 @@
    charcoal dark theme where the vibrant accents pop. Mobile-only layout
    (~390px), single column, bottom tab bar navigation.
 
+   MOTION RULES (performance):
+   - Only `transform` and `opacity` are ever animated (GPU-compositable).
+     Progress bars use scaleX, chart bars use scaleY, strikethrough uses a
+     scaling pseudo-element — never width/height/top/left/margin/padding.
+   - One motion language: --ease-out for entrances/settles, --ease-spring
+     for playful pops. Durations 150–400ms.
+   - Heavy effects (backdrop blur) are limited to the tab bar only.
+   - Repeating rows get `contain` + `content-visibility: auto` so
+     off-screen items cost nothing.
+
    Contents:
-     1. Design tokens (light + dark)
+     1. Design tokens (light + dark + motion)
      2. Base & layout
      3. Header / search
      4. Cards (incl. gradient hero cards)
      5. Pills, chips, badges, buttons
-     6. Task rows & checkbox
+     6. Task rows, checkbox & swipe-to-delete
      7. Bottom tab bar & FAB
      8. Bottom sheets & forms
      9. Toast
@@ -64,6 +74,13 @@
   --radius-sm: 16px;
 
   --tabbar-h:  64px;
+
+  /* motion language — shared by CSS and the Web Animations API in app.js */
+  --ease-out:    cubic-bezier(.22, 1, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --dur-fast:    .15s;
+  --dur:         .3s;
+  --dur-slow:    .45s;
 }
 
 [data-theme="dark"] {
@@ -100,6 +117,8 @@
 
 html { -webkit-text-size-adjust: 100%; }
 
+[hidden] { display: none !important; }
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
                Roboto, Inter, system-ui, sans-serif;
@@ -121,7 +140,7 @@ body {
 .view {
   padding: max(16px, env(safe-area-inset-top)) 20px
            calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 96px);
-  animation: viewIn .32s cubic-bezier(.22, 1, .36, 1);
+  animation: viewIn .32s var(--ease-out);
 }
 
 @keyframes viewIn {
@@ -179,9 +198,9 @@ button {
   color: var(--text);
   box-shadow: var(--shadow);
   position: relative;
-  transition: transform .15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
-.icon-btn:active { transform: scale(.92); }
+.icon-btn:active { transform: scale(.9); }
 
 .icon-btn .alert-dot {
   position: absolute; top: 9px; right: 10px;
@@ -214,7 +233,9 @@ button {
   color: var(--text-3);
   box-shadow: var(--shadow);
   margin-bottom: 18px;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+button.searchbar:active { transform: scale(.98); }
 
 .searchbar input {
   border: 0; outline: 0; background: none;
@@ -236,9 +257,9 @@ button {
   box-shadow: var(--shadow);
   position: relative;
   flex: none;
-  transition: transform .15s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
-.filter-btn:active { transform: scale(.93); }
+.filter-btn:active { transform: scale(.9); }
 .filter-btn.on { background: var(--pill-dark); color: var(--bg); border-color: transparent; }
 .filter-btn .count {
   position: absolute; top: -5px; right: -5px;
@@ -271,6 +292,7 @@ button {
   background: var(--grad-hero);
   box-shadow: 0 18px 40px -14px rgba(214, 84, 177, .55);
   margin-bottom: 22px;
+  contain: layout style;
 }
 .hero-card.cool { background: var(--grad-cool); box-shadow: 0 18px 40px -14px rgba(110, 105, 255, .5); }
 
@@ -298,6 +320,8 @@ button {
 .hero-stat .n { font-size: 22px; font-weight: 800; }
 .hero-stat .l { font-size: 12px; opacity: .85; }
 
+/* Progress bars animate with scaleX (GPU) — never width.
+   The inner bar is full-width and scaled; app.js sets the transform. */
 .progressbar {
   height: 9px;
   border-radius: 6px;
@@ -307,10 +331,12 @@ button {
   position: relative;
 }
 .progressbar > i {
-  display: block; height: 100%;
+  display: block; height: 100%; width: 100%;
   border-radius: 6px;
   background: #fff;
-  transition: width .6s cubic-bezier(.22, 1, .36, 1);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .7s var(--ease-out) .08s;
 }
 
 /* neutral progress bar variant (stats view, category rows) */
@@ -341,10 +367,10 @@ button {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-2);
-  transition: transform .15s ease, background .2s ease, color .2s ease;
+  transition: transform var(--dur-fast) var(--ease-out), background .2s ease, color .2s ease;
   white-space: nowrap;
 }
-.pill:active { transform: scale(.94); }
+.pill:active { transform: scale(.92); }
 .pill.active { background: var(--pill-dark); color: var(--on-dark); border-color: transparent; }
 
 .pill .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
@@ -406,7 +432,7 @@ button {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -.01em;
-  transition: transform .15s ease, opacity .2s ease;
+  transition: transform var(--dur-fast) var(--ease-out), opacity .2s ease;
   border: 0;
 }
 .btn:active { transform: scale(.96); }
@@ -422,7 +448,10 @@ button {
 .btn.gradient { background: var(--grad-hero); color: #fff; }
 .btn:disabled { opacity: .45; pointer-events: none; }
 
-/* ---------- 6. Task rows & checkbox ---------- */
+.link { font-size: 14px; font-weight: 600; color: var(--blue); transition: opacity var(--dur-fast) ease; }
+.link:active { opacity: .55; }
+
+/* ---------- 6. Task rows, checkbox & swipe-to-delete ---------- */
 
 .task-list { display: flex; flex-direction: column; gap: 10px; }
 
@@ -450,7 +479,48 @@ button {
 }
 .section-head .link { font-size: 14px; font-weight: 600; color: var(--blue); }
 
+/* Each list entry is a .task-item wrapper:
+   [ .swipe-action (revealed underneath) | .task-row (slides with the finger) ]
+   The wrapper owns shadow/radius/clipping; rows are cheap to move around.
+   contain + content-visibility let the browser skip off-screen rows. */
+.task-item {
+  position: relative;
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 84px;
+  animation: rowIn var(--dur) var(--ease-out) backwards;
+}
+
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* a freshly added row drops in from the top with a slight scale */
+.task-item.row-enter { animation: rowEnter .42s var(--ease-out); }
+@keyframes rowEnter {
+  from { opacity: 0; transform: translateY(-12px) scale(.96); }
+}
+
+.swipe-action {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--red);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 24px;
+  opacity: 0; /* fades in as the row is swiped */
+}
+
 .task-row {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 13px;
@@ -458,26 +528,28 @@ button {
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 15px 16px;
-  box-shadow: var(--shadow);
   text-align: left;
   width: 100%;
-  transition: transform .15s ease, opacity .3s ease;
-  animation: rowIn .3s cubic-bezier(.22, 1, .36, 1) backwards;
+  touch-action: pan-y; /* horizontal pans are ours (swipe), vertical stays native scroll */
+  transition: transform var(--dur-fast) var(--ease-out), opacity .3s ease;
 }
 .task-row:active { transform: scale(.98); }
+.task-row.swiping { transition: none; } /* tracks the finger 1:1 */
 
-@keyframes rowIn {
-  from { opacity: 0; transform: translateY(8px) scale(.98); }
-  to   { opacity: 1; transform: none; }
+/* brief tinted highlight when a task is checked off (opacity-only) */
+.task-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--check-c, var(--mint));
+  opacity: 0;
+  pointer-events: none;
 }
+.task-row.flash::after { animation: rowFlash .55s ease; }
+@keyframes rowFlash { 25% { opacity: .14; } 100% { opacity: 0; } }
 
-.task-row.completing { animation: rowDone .42s ease forwards; }
-@keyframes rowDone {
-  30% { transform: scale(1.02); }
-  100% { opacity: 0; transform: scale(.9); }
-}
-
-/* custom round checkbox, tinted by category color */
+/* custom round checkbox — the checkmark draws itself via stroke-dashoffset */
 .check {
   width: 26px; height: 26px;
   border-radius: 50%;
@@ -486,19 +558,29 @@ button {
   display: grid;
   place-items: center;
   flex: none;
-  transition: background .2s ease, color .2s ease, transform .2s ease;
+  transition: background .2s ease, color .15s ease, transform .2s var(--ease-spring);
 }
-.check:active { transform: scale(.85); }
+.check:active { transform: scale(.82); }
+.check svg path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  transition: stroke-dashoffset .28s var(--ease-out) .06s;
+}
 .check.checked {
   background: var(--check-c, var(--mint));
   border-color: var(--check-c, var(--mint));
   color: #fff;
-  animation: checkPop .35s cubic-bezier(.34, 1.56, .64, 1);
+  animation: checkPop .35s var(--ease-spring);
 }
+.check.checked svg path { stroke-dashoffset: 0; }
 @keyframes checkPop { 50% { transform: scale(1.18); } }
 
 .task-main { flex: 1; min-width: 0; }
 .task-title {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+  position: relative;
   font-size: 15.5px;
   font-weight: 600;
   letter-spacing: -.01em;
@@ -507,14 +589,27 @@ button {
   white-space: nowrap;
   transition: color .25s ease;
 }
+/* animated strikethrough — a scaling line, not text-decoration */
+.task-title::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 52%;
+  height: 1.5px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform .32s var(--ease-out) .08s;
+}
+.task-row.done .task-title { color: var(--text-3); }
+.task-row.done .task-title::after { transform: scaleX(1); }
+.task-row.done { opacity: .75; }
+
 .task-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 6px;
 }
-.task-row.done .task-title { color: var(--text-3); text-decoration: line-through; }
-.task-row.done { opacity: .75; box-shadow: none; }
 
 .chevron { color: var(--text-3); flex: none; }
 
@@ -536,7 +631,21 @@ button {
   z-index: 40;
 }
 
+/* the active pill glides between tabs (positioned by app.js via transform) */
+.tab-glider {
+  position: absolute;
+  top: 0; left: 0;
+  width: 52px; height: 30px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  transform: translate(-100px, 0);
+  transition: transform .38s var(--ease-spring);
+  pointer-events: none;
+}
+
 .tab {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -553,10 +662,11 @@ button {
   place-items: center;
   width: 52px; height: 30px;
   border-radius: 999px;
-  transition: background .25s ease;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+.tab:active .ind { transform: scale(.85); }
 .tab.active { color: var(--text); }
-.tab.active .ind { background: var(--blue-soft); color: var(--blue); }
+.tab.active .ind { color: var(--blue); }
 
 .fab {
   position: fixed;
@@ -570,22 +680,21 @@ button {
   place-items: center;
   box-shadow: 0 14px 30px -8px rgba(214, 84, 177, .65);
   z-index: 41;
-  transition: transform .18s cubic-bezier(.34, 1.56, .64, 1);
+  transition: transform .18s var(--ease-spring);
 }
-.fab:active { transform: scale(.88) rotate(90deg); }
+.fab:active { transform: scale(.86) rotate(90deg); }
 
 /* ---------- 8. Bottom sheets & forms ---------- */
 
 .sheet-backdrop {
   position: fixed; inset: 0;
   background: rgba(10, 10, 16, .45);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
   opacity: 0;
   transition: opacity .3s ease;
   z-index: 50;
 }
 .sheet-backdrop.show { opacity: 1; }
+.sheet-backdrop.dragging { transition: none; }
 
 .sheet {
   position: fixed;
@@ -596,27 +705,44 @@ button {
   overflow-y: auto;
   background: var(--bg);
   border-radius: 28px 28px 0 0;
-  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+  padding: 0 20px calc(24px + env(safe-area-inset-bottom));
   transform: translateY(105%);
-  transition: transform .38s cubic-bezier(.22, 1, .36, 1);
+  transition: transform .38s var(--ease-out);
   z-index: 51;
   box-shadow: var(--shadow-lg);
 }
 .sheet.show { transform: translateY(0); }
+.sheet.dragging { transition: none; } /* tracks the finger 1:1 */
 
+/* drag-to-dismiss grip: generous hit area, no native panning */
+.sheet-grip {
+  position: sticky;
+  top: 0;
+  padding: 10px 0 6px;
+  margin: 0 -20px;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  background: var(--bg);
+  z-index: 2;
+}
 .sheet-handle {
   width: 40px; height: 4px;
   border-radius: 3px;
   background: var(--text-3);
   opacity: .4;
-  margin: 6px auto 14px;
+  margin: 0 auto;
 }
 
 .sheet-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin: 4px 0 18px;
+  touch-action: none; /* part of the drag-to-dismiss surface */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .sheet-title { font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
 .sheet-close {
@@ -626,7 +752,9 @@ button {
   color: var(--text-2);
   display: grid;
   place-items: center;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+.sheet-close:active { transform: scale(.85); }
 
 .field { margin-bottom: 16px; }
 .field > label {
@@ -688,12 +816,13 @@ select.input {
   font-size: 13.5px;
   font-weight: 700;
   color: var(--text-2);
-  transition: background .2s ease, color .2s ease;
+  transition: background .2s ease, color .2s ease, transform var(--dur-fast) var(--ease-out);
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
 }
+.seg-btn:active { transform: scale(.94); }
 .seg-btn.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .seg-btn.active.p-high   { color: var(--red); }
 .seg-btn.active.p-medium { color: #D97A1F; }
@@ -716,8 +845,10 @@ select.input {
   background: var(--purple-soft);
   color: var(--purple);
   border: 1px dashed color-mix(in srgb, var(--purple) 45%, transparent);
-  animation: rowIn .25s ease;
+  animation: rowIn .25s var(--ease-out);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+.suggest-chip:active { transform: scale(.94); }
 
 /* color swatch picker (new category / list) */
 .swatches { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -725,8 +856,9 @@ select.input {
   width: 38px; height: 38px;
   border-radius: 50%;
   border: 3px solid transparent;
-  transition: transform .15s ease, border-color .15s ease;
+  transition: transform var(--dur-fast) var(--ease-spring), border-color .15s ease;
 }
+.swatch:active { transform: scale(.88); }
 .swatch.active { border-color: var(--text); transform: scale(1.1); }
 
 /* attachments */
@@ -737,7 +869,9 @@ select.input {
   border-radius: 14px;
   overflow: hidden;
   border: 1px solid var(--border);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+.thumb:active { transform: scale(.94); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumb .rm {
   position: absolute; top: 4px; right: 4px;
@@ -754,7 +888,9 @@ select.input {
   color: var(--text-2);
   display: grid;
   place-items: center;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+.thumb-add:active { transform: scale(.92); }
 
 /* task detail sheet */
 .detail-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
@@ -789,7 +925,7 @@ select.input {
   position: fixed;
   left: 50%;
   bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 16px);
-  transform: translate(-50%, 20px);
+  transform: translate(-50%, 24px) scale(.97);
   width: min(390px, calc(100vw - 40px));
   background: var(--pill-dark);
   color: var(--on-dark);
@@ -802,11 +938,11 @@ select.input {
   font-weight: 600;
   box-shadow: var(--shadow-lg);
   opacity: 0;
-  transition: opacity .25s ease, transform .3s cubic-bezier(.22, 1, .36, 1);
+  transition: opacity .28s ease, transform .34s var(--ease-out);
   z-index: 60;
   pointer-events: none;
 }
-.toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); pointer-events: auto; }
 .toast .msg { flex: 1; }
 .toast .undo {
   color: var(--pink);
@@ -831,6 +967,7 @@ select.input {
   border-radius: 22px;
   padding: 16px;
   box-shadow: var(--shadow);
+  contain: layout style;
 }
 .stat-card .ico {
   width: 38px; height: 38px;
@@ -847,8 +984,33 @@ select.input {
 .chart-card .sub { font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
 .chart-card svg { display: block; width: 100%; height: auto; }
 
+/* bars grow from the baseline with scaleY (GPU), staggered via inline delay */
+.chart-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: barGrow .55s var(--ease-out) backwards;
+}
+@keyframes barGrow { from { transform: scaleY(0); } }
+
 .bar-label { font-size: 10.5px; font-weight: 600; fill: var(--text-3); }
-.bar-value { font-size: 10.5px; font-weight: 700; fill: var(--text-2); }
+.bar-value { font-size: 10.5px; font-weight: 700; fill: var(--text-2); animation: chartFade .4s ease backwards; }
+@keyframes chartFade { from { opacity: 0; } }
+
+/* the line chart draws its own path (pathLength="1" → dashoffset 1 → 0) */
+.line-path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: drawLine 1s var(--ease-out) .15s forwards;
+}
+@keyframes drawLine { to { stroke-dashoffset: 0; } }
+.line-area { opacity: 0; animation: chartFadeIn .6s ease .6s forwards; }
+@keyframes chartFadeIn { to { opacity: 1; } }
+.line-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dotPop .35s var(--ease-spring) backwards;
+}
+@keyframes dotPop { from { transform: scale(0); } }
 
 .cat-progress { display: flex; flex-direction: column; gap: 14px; }
 .cat-progress .row .top {
@@ -881,7 +1043,9 @@ select.input {
   border-bottom: 1px solid var(--border);
   font-size: 15.5px;
   font-weight: 600;
+  transition: transform var(--dur-fast) var(--ease-out);
 }
+button.settings-row:active { transform: scale(.985); }
 .settings-row:last-child { border-bottom: 0; }
 .settings-row .ico {
   width: 36px; height: 36px;
@@ -916,6 +1080,7 @@ select.input {
   padding: 34px 24px;
   text-align: center;
   border: 1px solid var(--border);
+  animation: rowIn .35s var(--ease-out);
 }
 .empty-card .ring {
   width: 64px; height: 64px;
@@ -940,8 +1105,9 @@ select.input {
   animation: fadeIn .2s ease;
   padding: 24px;
 }
-.viewer img { max-width: 100%; max-height: 90dvh; border-radius: 16px; }
+.viewer img { max-width: 100%; max-height: 90dvh; border-radius: 16px; animation: viewerImg .25s var(--ease-out); }
 @keyframes fadeIn { from { opacity: 0; } }
+@keyframes viewerImg { from { opacity: 0; transform: scale(.92); } }
 
 /* notification permission banner inside bell sheet */
 .notice {
@@ -960,7 +1126,8 @@ select.input {
 .spacer-8  { height: 8px; }
 .spacer-16 { height: 16px; }
 
-/* respect users who prefer less motion */
+/* Reduced motion: non-essential animation collapses to (near-)instant state
+   changes. app.js additionally skips FLIP/WAAPI/counter animations. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;
