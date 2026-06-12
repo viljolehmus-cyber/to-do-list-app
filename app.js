@@ -96,42 +96,6 @@ function withFlip(scope, mutate) {
   }
 }
 
-/** Counts the leading number in an element up from zero (stats view). */
-function countUpFrom(el) {
-  if (!el) return;
-  const m = String(el.textContent).match(/^(\d+)(.*)$/);
-  if (!m) return;
-  const target = Number(m[1]);
-  const suffix = m[2];
-  if (reducedMotion() || !target) return;
-  const t0 = performance.now();
-  const dur = 750;
-  const tick = (now) => {
-    const p = Math.min(1, (now - t0) / dur);
-    el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + suffix;
-    if (p < 1) requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-}
-
-/**
- * Progress bars render with their final scaleX inline; this replays them
- * from zero on view entry (the bar itself transitions transform in CSS).
- */
-function animateProgressBars(root) {
-  if (reducedMotion()) return;
-  for (const bar of $$('.progressbar > i', root)) {
-    const target = bar.style.transform;
-    if (!target) continue;
-    bar.style.transition = 'none';
-    bar.style.transform = 'scaleX(0)';
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      bar.style.transition = '';
-      bar.style.transform = target;
-    }));
-  }
-}
-
 /* ---------- date formatting ---------- */
 
 function parseISODate(iso) {
@@ -275,27 +239,18 @@ function setActiveTab(id, animate = true) {
   }
 }
 
-let viewAnim = null;
+let viewAnim = null; // kept for cancelled in-flight animations
 
-/** Directional slide-and-fade between tabs. The new view renders in the
-    same frame as the tap (no exit phase) so content is never late. */
+/** Tab switches are instant: the new view is fully rendered and visible
+    in the same frame as the tap — no entrance animation on content. */
 function switchTab(next) {
   if (next === state.tab) { render(); return; }
-  const dir = TAB_INDEX[next] > TAB_INDEX[state.tab] ? 1 : -1;
   state.tab = next;
   setActiveTab(next);
-
-  const view = $('#view');
   viewAnim?.cancel();
+  viewAnim = null;
   render();
   window.scrollTo(0, 0);
-  if (!reducedMotion()) {
-    viewAnim = view.animate(
-      [{ opacity: 0, transform: `translateX(${18 * dir}px)` }, { opacity: 1, transform: 'none' }],
-      { duration: 200, easing: EASE_OUT },
-    );
-    viewAnim.onfinish = () => { viewAnim = null; };
-  }
 }
 
 /* ==========================================================================
@@ -344,17 +299,14 @@ function taskItemInner(task) {
     </div>`;
 }
 
-function taskItemHTML(task, i = 0) {
-  return `<div class="task-item" data-id="${task.id}" data-u="${esc(task.updatedAt)}"
-    style="animation-delay:${Math.min(i * 18, 120)}ms">${taskItemInner(task)}</div>`;
+function taskItemHTML(task) {
+  return `<div class="task-item" data-id="${task.id}" data-u="${esc(task.updatedAt)}">${taskItemInner(task)}</div>`;
 }
 
 function createTaskItem(task) {
   const tpl = document.createElement('template');
   tpl.innerHTML = taskItemHTML(task).trim();
-  const el = tpl.content.firstElementChild;
-  el.style.animationDelay = '';
-  return el;
+  return tpl.content.firstElementChild;
 }
 
 /** Wire up check / open / swipe for one .task-item. */
@@ -1271,11 +1223,11 @@ function openBellSheet() {
     ${overdue.length ? `
       <div class="section-head"><h2>${icon('alert', { size: 18 })} Overdue</h2>
         <span class="count">${overdue.length}</span></div>
-      <div class="task-list" id="bl-overdue">${overdue.map((t, i) => taskItemHTML(t, i)).join('')}</div>` : ''}
+      <div class="task-list" id="bl-overdue">${overdue.map(taskItemHTML).join('')}</div>` : ''}
     ${dueSoon.length ? `
       <div class="section-head"><h2>${icon('clock', { size: 18 })} Due soon</h2>
         <span class="count">${dueSoon.length}</span></div>
-      <div class="task-list" id="bl-soon">${dueSoon.map((t, i) => taskItemHTML(t, i)).join('')}</div>` : ''}
+      <div class="task-list" id="bl-soon">${dueSoon.map(taskItemHTML).join('')}</div>` : ''}
     ${!overdue.length && !dueSoon.length ? `
       <div class="empty-card">
         <div class="ring">${icon('check-circle', { size: 28 })}</div>
@@ -1422,13 +1374,12 @@ function renderToday(view) {
     if (flip) withFlip(view, apply); else apply();
   }
 
-  // initial fill with a staggered entrance, then targeted updates only
+  // initial fill renders everything at once; afterwards, targeted updates only
   {
     const tasks = db.getTasks();
     const { overdue, today, suggested, doneToday } = smart.buildToday(tasks);
-    let i = 0;
     const fill = (list, items) => {
-      list.innerHTML = items.map((t) => taskItemHTML(t, i++)).join('');
+      list.innerHTML = items.map(taskItemHTML).join('');
       bindList(list);
     };
     fill(els.sections.overdue[1], overdue);
@@ -1436,8 +1387,6 @@ function renderToday(view) {
     fill(els.sections.next[1], suggested);
     fill(els.sections.done[1], doneToday.slice(0, 5));
     refresh({ flip: false });
-    [els.nDone, els.nOpen, els.nOver].forEach(countUpFrom);
-    animateProgressBars(view);
   }
   state.refresh = refresh;
 
@@ -1552,13 +1501,13 @@ function renderTasks(view) {
     if (flip) withFlip(view, apply); else apply();
   }
 
-  // initial fill with a staggered entrance, then targeted updates only
+  // initial fill renders everything at once; afterwards, targeted updates only
   {
     const { open, done } = tasksViewData();
-    els.open.innerHTML = open.map((t, i) => taskItemHTML(t, i)).join('');
+    els.open.innerHTML = open.map(taskItemHTML).join('');
     bindList(els.open);
     if (state.showCompleted) {
-      els.doneList.innerHTML = done.map((t, i) => taskItemHTML(t, i)).join('');
+      els.doneList.innerHTML = done.map(taskItemHTML).join('');
       bindList(els.doneList);
     }
     refresh({ flip: false });
@@ -1621,9 +1570,9 @@ function calcStreak(tasks) {
   return streak;
 }
 
-/* --- chart builders (pure SVG, no libraries) ---
-   Bars grow with a staggered scaleY animation (transform-only, see
-   .chart-bar in styles.css); the line draws via pathLength/dashoffset. */
+/* --- chart builders (pure SVG, no libraries; rendered in final state,
+   no entrance animation, so the Stats tab is complete the moment it
+   appears) --- */
 
 function barChartSVG(data) {
   const W = 360, H = 170, top = 26, bottom = 30;
@@ -1637,10 +1586,9 @@ function barChartSVG(data) {
     const y = H - bottom - h;
     const color = d.count === 0 ? 'var(--surface-2)' : CHART_PALETTE[i % CHART_PALETTE.length];
     return `
-      <rect class="chart-bar" style="animation-delay:${i * 60}ms"
-            x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}"
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW}" height="${h.toFixed(1)}"
             rx="${Math.min(9, barW / 2)}" fill="${color}"/>
-      ${d.count ? `<text class="bar-value" style="animation-delay:${i * 60 + 280}ms"
+      ${d.count ? `<text class="bar-value"
             x="${(x + barW / 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" text-anchor="middle">${d.count}</text>` : ''}
       <text class="bar-label" x="${(x + barW / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle">${d.label}</text>`;
   }).join('');
@@ -1673,8 +1621,7 @@ function lineChartSVG(data) {
   const labels = data.map((d, i) => i % 2 === 0
     ? `<text class="bar-label" x="${(pad + i * stepX).toFixed(1)}" y="${H - 8}" text-anchor="middle">${d.label}</text>` : '').join('');
   const dots = pts.map(([x, y], i) => data[i].count
-    ? `<circle class="line-dot" style="animation-delay:${400 + i * 35}ms"
-         cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#5B6CFF"/>` : '').join('');
+    ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#5B6CFF"/>` : '').join('');
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Activity line chart">
     <defs>
@@ -1686,8 +1633,8 @@ function lineChartSVG(data) {
         <stop offset="0%" stop-color="#5B6CFF"/><stop offset="100%" stop-color="#9D6BFF"/>
       </linearGradient>
     </defs>
-    <path class="line-area" d="${area}" fill="url(#lc-fill)"/>
-    <path class="line-path" pathLength="1" d="${path}" fill="none" stroke="url(#lc-stroke)"
+    <path d="${area}" fill="url(#lc-fill)"/>
+    <path d="${path}" fill="none" stroke="url(#lc-stroke)"
           stroke-width="3" stroke-linecap="round"/>
     ${dots}${labels}</svg>`;
 }
@@ -1710,13 +1657,13 @@ function renderStats(view) {
     </div>`;
 
   const categories = db.getCategories();
-  const catRows = categories.map((c, i) => {
+  const catRows = categories.map((c) => {
     const catTasks = tasks.filter((t) => t.category === c.id);
     if (!catTasks.length) return '';
     const completed = catTasks.filter((t) => t.completed).length;
     const pct = Math.round((completed / catTasks.length) * 100);
     return `
-      <div class="row" style="animation:rowIn .3s ${i * 50}ms backwards">
+      <div class="row">
         <div class="top">
           <span class="name"><span class="dot c-${c.color}"></span>${esc(c.name)}</span>
           <span class="pct">${completed}/${catTasks.length} · ${pct}%</span>
@@ -1764,11 +1711,6 @@ function renderStats(view) {
         <div class="sub">Completion per category</div>
         <div class="cat-progress">${catRows}</div>
       </div>` : ''}`;
-
-  // numbers count up from zero; bars/lines animate via CSS (see styles.css)
-  $$('.stat-card .n', view).forEach(countUpFrom);
-  countUpFrom($('#st-week', view));
-  animateProgressBars(view);
 }
 
 /* ==========================================================================

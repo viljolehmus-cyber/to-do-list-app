@@ -137,15 +137,11 @@ body {
   position: relative;
 }
 
+/* Tab content renders complete and visible immediately — entrance
+   animations are reserved for user actions (add/complete/undo). */
 .view {
   padding: max(16px, env(safe-area-inset-top)) 20px
            calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 96px);
-  animation: viewIn .24s var(--ease-out);
-}
-
-@keyframes viewIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
 }
 
 h1.page-title {
@@ -491,7 +487,6 @@ button.searchbar:active { transform: scale(.98); }
   contain: layout style paint;
   content-visibility: auto;
   contain-intrinsic-size: auto 84px;
-  animation: rowIn .24s var(--ease-out) backwards;
 }
 
 @keyframes rowIn {
@@ -984,33 +979,10 @@ select.input {
 .chart-card .sub { font-size: 13px; color: var(--text-2); margin-bottom: 12px; }
 .chart-card svg { display: block; width: 100%; height: auto; }
 
-/* bars grow from the baseline with scaleY (GPU), staggered via inline delay */
-.chart-bar {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: barGrow .55s var(--ease-out) backwards;
-}
-@keyframes barGrow { from { transform: scaleY(0); } }
-
+/* charts render in their final state — no entrance animation, so the
+   Stats tab is complete the moment it opens */
 .bar-label { font-size: 10.5px; font-weight: 600; fill: var(--text-3); }
-.bar-value { font-size: 10.5px; font-weight: 700; fill: var(--text-2); animation: chartFade .4s ease backwards; }
-@keyframes chartFade { from { opacity: 0; } }
-
-/* the line chart draws its own path (pathLength="1" → dashoffset 1 → 0) */
-.line-path {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: drawLine 1s var(--ease-out) .15s forwards;
-}
-@keyframes drawLine { to { stroke-dashoffset: 0; } }
-.line-area { opacity: 0; animation: chartFadeIn .6s ease .6s forwards; }
-@keyframes chartFadeIn { to { opacity: 1; } }
-.line-dot {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: dotPop .35s var(--ease-spring) backwards;
-}
-@keyframes dotPop { from { transform: scale(0); } }
+.bar-value { font-size: 10.5px; font-weight: 700; fill: var(--text-2); }
 
 .cat-progress { display: flex; flex-direction: column; gap: 14px; }
 .cat-progress .row .top {
@@ -1080,7 +1052,6 @@ button.settings-row:active { transform: scale(.985); }
   padding: 34px 24px;
   text-align: center;
   border: 1px solid var(--border);
-  animation: rowIn .35s var(--ease-out);
 }
 .empty-card .ring {
   width: 64px; height: 64px;

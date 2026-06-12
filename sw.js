@@ -10,7 +10,7 @@
    subdirectory (e.g. GitHub Pages: username.github.io/repo/).
    ========================================================================== */
 
-const VERSION = 'taskly-v3';
+const VERSION = 'taskly-v4';
 
 const ASSETS = [
   './',
