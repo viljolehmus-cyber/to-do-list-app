@@ -277,7 +277,8 @@ function setActiveTab(id, animate = true) {
 
 let viewAnim = null;
 
-/** Directional slide-and-fade between tabs — no hard cuts. */
+/** Directional slide-and-fade between tabs. The new view renders in the
+    same frame as the tap (no exit phase) so content is never late. */
 function switchTab(next) {
   if (next === state.tab) { render(); return; }
   const dir = TAB_INDEX[next] > TAB_INDEX[state.tab] ? 1 : -1;
@@ -286,24 +287,15 @@ function switchTab(next) {
 
   const view = $('#view');
   viewAnim?.cancel();
-  if (reducedMotion()) {
-    render();
-    window.scrollTo(0, 0);
-    return;
-  }
-  viewAnim = view.animate(
-    [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${-14 * dir}px)` }],
-    { duration: 90, easing: 'ease-in' },
-  );
-  viewAnim.onfinish = () => {
-    render();
-    window.scrollTo(0, 0);
+  render();
+  window.scrollTo(0, 0);
+  if (!reducedMotion()) {
     viewAnim = view.animate(
-      [{ opacity: 0, transform: `translateX(${22 * dir}px)` }, { opacity: 1, transform: 'none' }],
-      { duration: 250, easing: EASE_OUT },
+      [{ opacity: 0, transform: `translateX(${18 * dir}px)` }, { opacity: 1, transform: 'none' }],
+      { duration: 200, easing: EASE_OUT },
     );
     viewAnim.onfinish = () => { viewAnim = null; };
-  };
+  }
 }
 
 /* ==========================================================================
@@ -354,7 +346,7 @@ function taskItemInner(task) {
 
 function taskItemHTML(task, i = 0) {
   return `<div class="task-item" data-id="${task.id}" data-u="${esc(task.updatedAt)}"
-    style="animation-delay:${Math.min(i * 35, 280)}ms">${taskItemInner(task)}</div>`;
+    style="animation-delay:${Math.min(i * 18, 120)}ms">${taskItemInner(task)}</div>`;
 }
 
 function createTaskItem(task) {
