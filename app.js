@@ -27,6 +27,8 @@ import { icon } from './icons.js';
 import * as db from './storage.js';
 import * as smart from './suggestions.js';
 import * as notify from './notifications.js';
+import * as auth from './auth.js';
+import * as entry from './entry.js';
 
 /* ==========================================================================
    Constants & small helpers
@@ -1720,20 +1722,26 @@ function renderStats(view) {
 function renderProfile(view) {
   const settings = db.getSettings();
   const perm = notify.permission();
+  const user = auth.currentUser();
 
   view.innerHTML = `
     <h1 class="page-title">Profile <span class="light">&amp; settings</span></h1>
     <div class="spacer-16"></div>
 
+    <div class="group-label">Account</div>
     <div class="settings-group">
       <div class="settings-row">
         <div class="avatar">${settings.name ? esc(settings.name[0].toUpperCase()) : icon('user', { size: 20 })}</div>
         <div class="grow">
           <input class="inline-input" id="pf-name" placeholder="Your name"
                  value="${esc(settings.name)}" autocomplete="off">
-          <span class="sub">Shown in your daily greeting</span>
+          <span class="sub">${user ? esc(user.email) : 'Shown in your daily greeting'}</span>
         </div>
       </div>
+      <button class="settings-row" id="pf-logout">
+        <div class="ico" style="background:var(--red-soft);color:var(--red)">${icon('log-out', { size: 18 })}</div>
+        <div class="grow" style="color:var(--red)">Log out</div>
+      </button>
     </div>
 
     <div class="group-label">Appearance</div>
@@ -1792,15 +1800,26 @@ function renderProfile(view) {
     <div class="settings-group">
       <div class="settings-row">
         <div class="ico" style="background:var(--blue-soft);color:var(--blue)">${icon('info', { size: 18 })}</div>
-        <div class="grow">Taskly v1.1
+        <div class="grow">Taskly v1.2
           <span class="sub">Offline-first PWA · your data never leaves this device</span>
         </div>
       </div>
     </div>`;
 
   $('#pf-name', view).addEventListener('change', (e) => {
-    db.saveSettings({ name: e.target.value.trim() });
+    const name = e.target.value.trim();
+    db.saveSettings({ name });
+    if (user) auth.updateName(user.id, name); // keep the account in sync
     render();
+  });
+
+  $('#pf-logout', view).addEventListener('click', () => {
+    openConfirmSheet('Log out?',
+      'You can log back in anytime. Your tasks stay saved on this device.',
+      'Log Out', () => {
+        auth.logOut();
+        entry.goWelcome();
+      });
   });
 
   $$('#pf-theme .seg-btn', view).forEach((b) => b.addEventListener('click', () => {
@@ -1860,9 +1879,28 @@ function renderProfile(view) {
    Boot
    ========================================================================== */
 
-function init() {
+let appBooted = false;
+
+/**
+ * Boots (or re-reveals) the actual app once the entry flow hands off.
+ * Idempotent: the one-time wiring runs only on the first call, so logging
+ * out and back in just re-renders rather than double-binding listeners.
+ */
+function bootApp() {
+  // greeting & avatar read settings.name — keep it in sync with the account
+  const user = auth.currentUser();
+  if (user) db.saveSettings({ name: user.name });
+  document.body.dataset.screen = 'app';
+
+  if (appBooted) {
+    state.tab = 'today';
+    render();
+    requestAnimationFrame(() => positionGlider(false));
+    return;
+  }
+  appBooted = true;
+
   db.ensureSeed();
-  applyTheme();
   buildTabbar();
 
   const fab = $('#fab');
@@ -1883,12 +1921,19 @@ function init() {
 
   // local reminder loop (see notifications.js for the closed-app limitation)
   notify.init(db.getTasks);
+}
+
+function init() {
+  applyTheme(); // theme applies to the entry screens too
 
   // PWA: offline support + installability
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch((err) =>
       console.warn('[sw] registration failed:', err));
   }
+
+  // Decide what to show first: welcome / onboarding / the app itself.
+  entry.runEntryFlow({ onEnter: bootApp });
 }
 
 init();

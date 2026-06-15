@@ -10,7 +10,7 @@
    subdirectory (e.g. GitHub Pages: username.github.io/repo/).
    ========================================================================== */
 
-const VERSION = 'taskly-v4';
+const VERSION = 'taskly-v5';
 
 const ASSETS = [
   './',
@@ -21,6 +21,8 @@ const ASSETS = [
   './icons.js',
   './notifications.js',
   './suggestions.js',
+  './auth.js',
+  './entry.js',
   './manifest.json',
   './icons/icon-180.png',
   './icons/icon-192.png',
