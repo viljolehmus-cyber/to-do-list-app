@@ -111,15 +111,7 @@ function showWelcome() {
     el.innerHTML = `
       <div class="welcome">
         <div class="welcome-hero">
-          <div class="floaters">
-            ${COLORS.map((c, i) => `<span class="floater f${i}" style="background:${c}"></span>`).join('')}
-          </div>
-          <div class="brand-mark">
-            <svg class="draw" width="56" height="56" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-              <path pathLength="1" d="M20 6 9 17l-5-5"/>
-            </svg>
-          </div>
+          <div class="brand-mark">${icon('check', { size: 56, strokeWidth: 3 })}</div>
           <div class="brand-name">Taskly</div>
         </div>
 

@@ -1143,15 +1143,6 @@ body:not([data-screen="app"]) #tabbar { display: none; }
   overflow: hidden;
 }
 
-.floaters { position: absolute; inset: 0; pointer-events: none; }
-.floater { position: absolute; border-radius: 50%; opacity: .55; }
-.floater.f0 { width: 26px; height: 26px; top: 16%; left: 16%; animation: float 5.5s ease-in-out infinite; }
-.floater.f1 { width: 14px; height: 14px; top: 24%; right: 18%; animation: float 6.5s ease-in-out infinite .4s; }
-.floater.f2 { width: 32px; height: 32px; bottom: 18%; left: 12%; animation: float 6s ease-in-out infinite .8s; }
-.floater.f3 { width: 12px; height: 12px; bottom: 28%; right: 14%; animation: float 5s ease-in-out infinite .2s; }
-.floater.f4 { width: 18px; height: 18px; top: 50%; left: 8%;  animation: float 6.2s ease-in-out infinite 1s; }
-.floater.f5 { width: 20px; height: 20px; top: 44%; right: 9%; animation: float 5.8s ease-in-out infinite .6s; }
-
 .brand-mark {
   width: 104px; height: 104px;
   border-radius: 30px;
@@ -1161,14 +1152,12 @@ body:not([data-screen="app"]) #tabbar { display: none; }
   place-items: center;
   color: #fff;
   box-shadow: 0 22px 50px -16px rgba(0, 0, 0, .45);
-  animation: markIn .6s var(--ease-spring) both;
 }
 .brand-name {
   color: #fff;
   font-weight: 800;
   font-size: 26px;
   letter-spacing: -.02em;
-  animation: obRise .5s var(--ease-out) .28s both;
 }
 
 .welcome-body {
@@ -1177,7 +1166,6 @@ body:not([data-screen="app"]) #tabbar { display: none; }
   margin-top: -28px;
   padding: 30px 24px calc(26px + env(safe-area-inset-bottom));
   position: relative;
-  animation: bodyUp .5s var(--ease-out) .12s both;
 }
 .welcome-title { font-size: 30px; font-weight: 800; letter-spacing: -.03em; line-height: 1.15; }
 .welcome-title span {
@@ -1315,9 +1303,8 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 .onb-slide.in .il-prio.d2 i { animation-delay: .36s; }
 .onb-slide.in .il-prio.d3 i { animation-delay: .46s; }
 
-/* the self-drawing check (welcome mark + onboarding) */
+/* the self-drawing check (onboarding illustrations) */
 .draw path { stroke-dasharray: 1; stroke-dashoffset: 1; }
-.brand-mark .draw path { animation: obDraw .85s var(--ease-out) .4s both; }
 .onb-slide.in .draw path { animation: obDraw .75s var(--ease-out) .35s both; }
 
 /* shared illustration components */
@@ -1448,8 +1435,6 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 
 /* entry keyframes (transform/opacity only) */
 @keyframes float    { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-14px); } }
-@keyframes markIn   { from { opacity: 0; transform: translateY(18px) scale(.8) rotate(-8deg); } to { opacity: 1; transform: none; } }
-@keyframes bodyUp   { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: none; } }
 @keyframes obArtIn  { from { transform: translateY(14px) scale(.96); } to { transform: none; } }
 @keyframes obRise   { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 @keyframes obPop    { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
