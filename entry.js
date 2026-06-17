@@ -311,7 +311,6 @@ const SLIDES = [
     desc: 'Your beautiful, private home for getting things done — entirely on your device.',
     art: () => `
       <div class="il il-welcome">
-        ${COLORS.map((c, i) => `<span class="il-orb orb${i}" style="background:${c}"></span>`).join('')}
         ${badge('grad-hero', drawCheck(46))}
       </div>`,
   },
@@ -465,7 +464,7 @@ function showOnboarding() {
     const next = el.querySelector('#onb-next');
 
     const setTrack = (px, animate) => {
-      track.style.transition = (animate && !reduce()) ? `transform .42s ${EASE_OUT}` : 'none';
+      track.style.transition = (animate && !reduce()) ? `transform .3s ${EASE_OUT}` : 'none';
       track.style.transform = `translateX(${px}px)`;
     };
 
