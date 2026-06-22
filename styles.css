@@ -1371,7 +1371,7 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 .il-spin { color: var(--purple); display: grid; place-items: center; }
 
 /* search */
-.il-search { width: 100%; flex-direction: column; gap: 10px; }
+.il-search { width: 100%; flex-direction: column; gap: 10px; transform: translateY(-14px); }
 /* a proper search field: larger than the task rows below and accented in
    blue so it clearly reads as a search bar, not a fourth task */
 .il-searchbar {
