@@ -430,7 +430,7 @@ const SLIDES = [
 
 function showOnboarding() {
   const total = SLIDES.length;
-  const st = { i: 0, w: 0, dragging: false };
+  const st = { i: 0, w: 0 };
 
   transitionTo((el) => {
     el.innerHTML = `
@@ -464,7 +464,7 @@ function showOnboarding() {
     const next = el.querySelector('#onb-next');
 
     const setTrack = (px, animate) => {
-      track.style.transition = (animate && !reduce()) ? `transform .3s ${EASE_OUT}` : 'none';
+      track.style.transition = (animate && !reduce()) ? `transform .2s ${EASE_OUT}` : 'none';
       track.style.transform = `translateX(${px}px)`;
     };
 
@@ -473,10 +473,7 @@ function showOnboarding() {
       st.w = slides[0].getBoundingClientRect().width; // one slide = one viewport
       setTrack(-st.i * st.w, animate);
       dots.forEach((d, k) => d.classList.toggle('active', k === st.i));
-      slides.forEach((s, k) => {
-        s.querySelector('.onb-art').style.transform = ''; // clear any parallax
-        s.classList.toggle('in', k === st.i);             // replay this slide's motion
-      });
+      slides.forEach((s, k) => s.classList.toggle('in', k === st.i));
       back.classList.toggle('hidden', st.i === 0);
       const last = st.i === total - 1;
       next.innerHTML = last
@@ -495,53 +492,7 @@ function showOnboarding() {
     back.addEventListener('click', () => go(st.i - 1));
     next.addEventListener('click', () => (st.i === total - 1 ? done() : go(st.i + 1)));
 
-    /* --- swipe between slides (transform-only, parallax on the art) --- */
-    let startX = 0, startY = 0, dx = 0, locked = false, pid = null;
-
-    track.addEventListener('pointerdown', (e) => {
-      if (!e.isPrimary) return;
-      pid = e.pointerId;
-      startX = e.clientX; startY = e.clientY; dx = 0;
-      locked = false; st.dragging = false;
-      st.w = slides[0].getBoundingClientRect().width;
-    });
-
-    track.addEventListener('pointermove', (e) => {
-      if (pid === null || e.pointerId !== pid) return;
-      const mx = e.clientX - startX;
-      const my = e.clientY - startY;
-      if (!locked) {
-        if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.2) {
-          locked = true; st.dragging = true;
-          track.style.transition = 'none';
-          track.style.willChange = 'transform';
-          track.setPointerCapture(pid);
-        } else if (Math.abs(my) > 12) { pid = null; return; }
-      }
-      if (!locked) return;
-      // edge resistance at the first/last slide
-      let d = mx;
-      if ((st.i === 0 && d > 0) || (st.i === total - 1 && d < 0)) d *= 0.35;
-      dx = d;
-      track.style.transform = `translateX(${-st.i * st.w + d}px)`;
-      // subtle parallax: artwork drifts a little faster than the slide
-      slides.forEach((s) => { s.querySelector('.onb-art').style.transform = `translateX(${d * 0.12}px)`; });
-    });
-
-    const end = (e) => {
-      if (pid === null || e.pointerId !== pid) return;
-      pid = null;
-      track.style.willChange = '';
-      if (!locked) return;
-      st.dragging = false;
-      const threshold = st.w * 0.2;
-      if (dx <= -threshold) go(st.i + 1);
-      else if (dx >= threshold) go(st.i - 1);
-      else go(st.i); // snap back
-    };
-    track.addEventListener('pointerup', end);
-    track.addEventListener('pointercancel', end);
-
+    // Navigation is via the Back / Next buttons only (no swipe gesture).
     // position once layout is ready
     requestAnimationFrame(() => go(0, false));
   }, 1);
