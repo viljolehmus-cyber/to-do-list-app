@@ -377,7 +377,10 @@ const SLIDES = [
     desc: 'Search by text and filter by category, priority, status or due date in a tap.',
     art: () => `
       <div class="il il-search">
-        <div class="il-searchbar pop"><span class="ic">${icon('search', { size: 18 })}</span>read<span class="il-caret"></span></div>
+        <div class="il-searchbar pop">
+          <span class="ic">${icon('search', { size: 20 })}</span>
+          <span class="q">read</span>
+        </div>
         ${miniRow('match rise d1', 'Read a book')}
         ${miniRow('nomatch', 'Buy groceries')}
         ${miniRow('match rise d3', 'Read the news')}

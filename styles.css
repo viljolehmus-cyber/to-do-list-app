@@ -1372,18 +1372,21 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 
 /* search */
 .il-search { width: 100%; flex-direction: column; gap: 10px; }
+/* a proper search field: larger than the task rows below and accented in
+   blue so it clearly reads as a search bar, not a fourth task */
 .il-searchbar {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 11px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 11px 14px;
-  box-shadow: var(--shadow);
-  font-size: 14px; font-weight: 600;
-  color: var(--text-2);
+  border: 2px solid var(--blue);
+  border-radius: 16px;
+  padding: 15px 18px;
+  box-shadow: 0 12px 26px -10px rgba(91, 108, 255, .5);
+  font-size: 16px; font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
 }
-.il-searchbar .ic { color: var(--text-3); display: inline-grid; }
-.il-caret { width: 2px; height: 16px; background: var(--blue); margin-left: 1px; animation: caret 1.05s steps(1) infinite; }
+.il-searchbar .ic { color: var(--blue); display: inline-grid; }
+.il-searchbar .q { color: var(--text); }
 
 /* progress & streak */
 .il-progress { flex-direction: column; align-items: center; gap: 26px; }
@@ -1410,9 +1413,6 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 /* smart */
 .il-smart { flex-direction: column; align-items: center; gap: 16px; }
 .il-smart .suggest-chip { margin-top: 0; }
-
-/* entry keyframes (transform/opacity only) */
-@keyframes caret    { 50% { opacity: 0; } }
 
 /* Reduced motion: non-essential animation collapses to (near-)instant state
    changes. app.js additionally skips FLIP/WAAPI/counter animations. */
