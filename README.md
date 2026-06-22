@@ -6,18 +6,27 @@ exclusively for the phone (~390 px wide) with a native-app feel: bottom tab
 bar, bottom sheets, gradient hero cards, smooth micro-interactions, and a dark
 mode that looks just as good as the light theme.
 
-All data lives in `localStorage` on your device. There is no backend and no
-sync — open it and start checking things off.
+It uses **Supabase** for real authentication and a private, per-user cloud
+database, while staying a static site you can host on GitHub Pages. **→ See
+[SETUP.md](SETUP.md) to connect your backend.** Until you do, the app runs in
+**local mode** (everything on-device) so it works out of the box.
 
 ## Features
 
-**Entry flow**
-- Polished **welcome** screen with **Log in** / **Sign up**
-- **Local demo auth** — accounts are stored in `localStorage`; the session
-  persists, so returning users skip straight to the app. ⚠️ This is demo
-  auth, **not real security** (see `auth.js`).
-- First-run **onboarding slideshow** — 10 swipeable, animated feature slides
-  shown once per account; **Log out** lives in Settings
+**Accounts & sync**
+- Real **sign up / log in** (Supabase Auth): email + password with email
+  confirmation, **forgot/reset password**, optional **Continue with Google**,
+  persistent sessions with auto token refresh
+- **Private per-user cloud database** (Supabase Postgres) protected by
+  **Row-Level Security** — every row is scoped to its owner
+- **Offline-first:** reads are instant from a local cache, writes are
+  optimistic and queued, then synced when back online — with a small
+  **sync status** indicator (synced / syncing / offline)
+- Account settings: profile (name + email), **change password**,
+  **delete account** (removes the user and all their data), export data
+- First-run **onboarding slideshow** — 10 animated feature slides, once per
+  account
+- Falls back to on-device **local mode** when Supabase isn't configured
 
 **Core**
 - Add, edit and delete tasks (delete & complete come with **Undo**)
@@ -57,17 +66,31 @@ sync — open it and start checking things off.
 ```
 index.html        app shell (header, view container, tab bar, FAB, toast, #gate)
 styles.css        design system: tokens, light/dark themes, components, entry flow
-app.js            main controller: views, sheets, actions, charts, boot flow
-storage.js        the only module touching task localStorage (+ sample data seed)
-auth.js           local demo auth (accounts/session) — NOT real security
-entry.js          welcome / login / sign-up + onboarding slideshow (DEV_MODE here)
+app.js            main controller: views, sheets, actions, charts, boot/auth routing
+config.js         Supabase URL + anon key (you fill this in — see SETUP.md)
+supa.js           the single Supabase client (or null in local mode)
+auth.js           authentication — Supabase Auth (cloud) or on-device (local)
+storage.js        per-user local cache + sync queue (synchronous UI data interface)
+sync.js           cloud push/pull, offline queue flush, status, realtime
+entry.js          welcome / login / sign-up / reset + onboarding slideshow
 suggestions.js    rule-based smart suggestions & date helpers
 notifications.js  local reminder loop (Notification API)
 icons.js          inline SVG icon system — icon('plus') returns an SVG string
 manifest.json     PWA manifest
-sw.js             service worker: pre-cached app shell, offline-first
+sw.js             service worker: pre-cached app shell + vendored client, offline-first
+vendor/supabase.js  the vendored @supabase/supabase-js browser bundle (no CDN)
 icons/            generated PNG app icons
+SETUP.md          step-by-step backend setup (SQL, RLS, auth, deploy)
 ```
+
+## Architecture (how the backend swap works)
+
+The UI never had to change: `storage.js` stays a **synchronous local cache**
+that the views read from. In cloud mode it's hydrated from Supabase on login,
+and every write also records an op in a per-user **sync queue** that `sync.js`
+flushes to Postgres (optimistic + offline-first). `auth.js` exposes one async
+API and runs against Supabase Auth when configured, or on-device accounts when
+not. So the same code path powers both modes.
 
 ## Accounts, onboarding & the dev shortcut
 

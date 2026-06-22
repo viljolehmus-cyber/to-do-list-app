@@ -34,6 +34,9 @@
     <!-- Toast with undo support -->
     <div id="toast" class="toast" role="status"></div>
 
+    <!-- Cloud sync status (shown only while syncing / offline / error) -->
+    <div id="sync-pill" class="sync-pill" role="status"></div>
+
     <!-- Entry layer: welcome / login / sign-up / onboarding (see entry.js).
          Sits above the app until the user is logged in and onboarded. -->
     <div id="gate" class="gate" aria-label="Welcome to Taskly"></div>
@@ -43,6 +46,9 @@
     Taskly needs JavaScript to run. Please enable it and reload.
   </noscript>
 
+  <!-- Vendored Supabase client (no CDN, so the PWA works offline). Loaded as a
+       classic script before the module so it exposes window.supabase. -->
+  <script src="vendor/supabase.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

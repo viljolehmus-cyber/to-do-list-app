@@ -29,6 +29,8 @@ import * as smart from './suggestions.js';
 import * as notify from './notifications.js';
 import * as auth from './auth.js';
 import * as entry from './entry.js';
+import * as sync from './sync.js';
+import { cloud } from './supa.js';
 
 /* ==========================================================================
    Constants & small helpers
@@ -1738,11 +1740,25 @@ function renderProfile(view) {
           <span class="sub">${user ? esc(user.email) : 'Shown in your daily greeting'}</span>
         </div>
       </div>
+      ${cloud ? `
+      <button class="settings-row" id="pf-password">
+        <div class="ico" style="background:var(--purple-soft);color:var(--purple)">${icon('lock', { size: 18 })}</div>
+        <div class="grow">Change password</div>${icon('chevron-right', { size: 18, cls: 'chevron' })}
+      </button>` : ''}
       <button class="settings-row" id="pf-logout">
         <div class="ico" style="background:var(--red-soft);color:var(--red)">${icon('log-out', { size: 18 })}</div>
         <div class="grow" style="color:var(--red)">Log out</div>
       </button>
     </div>
+
+    ${cloud ? `
+    <div class="group-label">Sync</div>
+    <div class="settings-group">
+      <div class="settings-row">
+        <div class="ico" id="pf-sync-ico" style="background:var(--mint-soft);color:var(--mint)">${icon('cloud', { size: 18 })}</div>
+        <div class="grow">Cloud sync<span class="sub" id="pf-sync-sub">Your tasks sync across your devices</span></div>
+      </div>
+    </div>` : ''}
 
     <div class="group-label">Appearance</div>
     <div class="settings-group" style="padding:14px 16px">
@@ -1789,9 +1805,9 @@ function renderProfile(view) {
         <div class="ico" style="background:var(--orange-soft);color:var(--orange)">${icon('upload', { size: 18 })}</div>
         <div class="grow">Import backup<span class="sub">Restore from a JSON file</span></div>
       </button>
-      <button class="settings-row" id="pf-reset">
-        <div class="ico" style="background:var(--red-soft);color:var(--red)">${icon('rotate-ccw', { size: 18 })}</div>
-        <div class="grow" style="color:var(--red)">Reset app<span class="sub">Erase everything on this device</span></div>
+      <button class="settings-row" id="pf-delete">
+        <div class="ico" style="background:var(--red-soft);color:var(--red)">${icon('trash', { size: 18 })}</div>
+        <div class="grow" style="color:var(--red)">Delete account<span class="sub">Permanently remove your account &amp; all data</span></div>
       </button>
       <input id="pf-import-file" type="file" accept="application/json" hidden>
     </div>
@@ -1800,8 +1816,16 @@ function renderProfile(view) {
     <div class="settings-group">
       <div class="settings-row">
         <div class="ico" style="background:var(--blue-soft);color:var(--blue)">${icon('info', { size: 18 })}</div>
-        <div class="grow">Taskly v1.2
-          <span class="sub">Offline-first PWA · your data never leaves this device</span>
+        <div class="grow">Taskly v2.0
+          <span class="sub">${cloud ? 'Cloud-synced PWA · works offline' : 'Local mode · data stays on this device'}</span>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="ico" style="background:var(--mint-soft);color:var(--mint)">${icon('shield', { size: 18 })}</div>
+        <div class="grow">Privacy
+          <span class="sub">${cloud
+            ? 'Your data is private to your account, protected by row-level security, and only you can read or change it.'
+            : 'Your data stays on this device and is never uploaded.'}</span>
         </div>
       </div>
     </div>`;
@@ -1809,18 +1833,20 @@ function renderProfile(view) {
   $('#pf-name', view).addEventListener('change', (e) => {
     const name = e.target.value.trim();
     db.saveSettings({ name });
-    if (user) auth.updateName(user.id, name); // keep the account in sync
+    auth.updateName(name); // keep the account (and cloud) in sync
     render();
   });
 
+  $('#pf-password', view)?.addEventListener('click', openPasswordSheet);
+
   $('#pf-logout', view).addEventListener('click', () => {
     openConfirmSheet('Log out?',
-      'You can log back in anytime. Your tasks stay saved on this device.',
-      'Log Out', () => {
-        auth.logOut();
-        entry.goWelcome();
-      });
+      cloud ? 'You’ll need to log back in. Your tasks stay safely in the cloud.'
+            : 'You can log back in anytime. Your tasks stay saved on this device.',
+      'Log Out', () => doLogout());
   });
+
+  if (cloud) updateSyncRow(view);
 
   $$('#pf-theme .seg-btn', view).forEach((b) => b.addEventListener('click', () => {
     db.saveSettings({ theme: b.dataset.v });
@@ -1865,13 +1891,48 @@ function renderProfile(view) {
     e.target.value = '';
   });
 
-  $('#pf-reset', view).addEventListener('click', () => {
-    openConfirmSheet('Reset app?',
-      'This permanently erases all tasks, lists, categories and settings on this device.',
-      'Erase Everything', () => {
-        db.clearAll();
+  $('#pf-delete', view).addEventListener('click', () => {
+    openConfirmSheet('Delete account?',
+      cloud ? 'This permanently deletes your account and all your tasks from the cloud. This cannot be undone.'
+            : 'This permanently erases all your tasks, lists and settings on this device.',
+      'Delete Everything', async () => {
+        const res = await auth.deleteAccount();
+        if (res && res.ok === false) { showToast(res.error || 'Could not delete account'); return; }
         location.reload();
       });
+  });
+}
+
+/* ---------- change-password sheet (cloud) ---------- */
+
+function openPasswordSheet() {
+  const { sheet, close } = openSheet(`
+    ${sheetHeader('Change password')}
+    <div class="field">
+      <label>New password</label>
+      <input id="cp-pass" class="input" type="password" placeholder="At least 6 characters" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label>Confirm new password</label>
+      <input id="cp-confirm" class="input" type="password" placeholder="Repeat the password" autocomplete="new-password">
+    </div>
+    <span class="field-error" id="cp-err" hidden></span>
+    <div class="spacer-8"></div>
+    <button class="btn block" id="cp-save">${icon('check', { size: 18 })}Update password</button>`);
+
+  const err = (m) => { const e = $('#cp-err', sheet); e.textContent = m; e.hidden = false; };
+  $('#cp-save', sheet).addEventListener('click', async () => {
+    const pass = $('#cp-pass', sheet).value;
+    const confirm = $('#cp-confirm', sheet).value;
+    if (pass.length < 6) return err('Use at least 6 characters.');
+    if (pass !== confirm) return err('Passwords don’t match.');
+    const btn = $('#cp-save', sheet);
+    btn.disabled = true;
+    const res = await auth.updatePassword(pass);
+    btn.disabled = false;
+    if (!res.ok) return err(res.error || 'Could not update password.');
+    close();
+    showToast('Password updated');
   });
 }
 
@@ -1887,10 +1948,21 @@ let appBooted = false;
  * out and back in just re-renders rather than double-binding listeners.
  */
 function bootApp() {
-  // greeting & avatar read settings.name — keep it in sync with the account
   const user = auth.currentUser();
-  if (user) db.saveSettings({ name: user.name });
+  // greeting & avatar read settings.name — keep it in sync with the account
+  if (user && user.name) db.saveSettings({ name: user.name });
   document.body.dataset.screen = 'app';
+
+  // starter content: cloud users get an empty-but-usable account (Inbox +
+  // categories); local-mode users get the colourful sample tasks too.
+  if (cloud) db.ensureDefaults(); else db.ensureSeed();
+
+  // (re)start cloud sync for this session (push queued writes, listen live)
+  if (cloud && user) {
+    sync.setUser(user.id);
+    sync.start({ status: setSyncStatus, remoteChange: onRemoteChange });
+    sync.flush();
+  }
 
   if (appBooted) {
     state.tab = 'today';
@@ -1900,7 +1972,6 @@ function bootApp() {
   }
   appBooted = true;
 
-  db.ensureSeed();
   buildTabbar();
 
   const fab = $('#fab');
@@ -1923,7 +1994,60 @@ function bootApp() {
   notify.init(db.getTasks);
 }
 
-function init() {
+/** Pull the signed-in user's data from the cloud (no-op in local mode). */
+async function loadUserData() {
+  if (!cloud) return;
+  try { await sync.pull(); } catch { /* offline → keep using the cache */ }
+}
+
+/** Remote change arrived (another device): re-pull and re-render. */
+async function onRemoteChange() {
+  try { await sync.pull(); render(); } catch { /* ignore */ }
+}
+
+async function doLogout() {
+  if (cloud) { sync.stop(); await auth.signOut(); /* SIGNED_OUT → reload */ }
+  else { await auth.signOut(); entry.goWelcome(); }
+}
+
+/* ---------- sync status indicator ---------- */
+
+let syncStatus = 'synced';
+
+function setSyncStatus(status) {
+  syncStatus = status;
+  const pill = document.getElementById('sync-pill');
+  if (pill) {
+    const map = {
+      syncing: { cls: 'syncing', ic: 'cloud',     text: 'Syncing…' },
+      offline: { cls: 'offline', ic: 'cloud-off', text: 'Offline — saved on device' },
+      error:   { cls: 'error',   ic: 'alert',     text: 'Sync paused — will retry' },
+    };
+    const m = map[status];
+    if (!m) { pill.classList.remove('show'); }
+    else {
+      pill.className = `sync-pill show ${m.cls}`;
+      pill.innerHTML = `${icon(m.ic, { size: 14 })}<span>${m.text}</span>`;
+    }
+  }
+  if (state.tab === 'profile') updateSyncRow();
+}
+
+function updateSyncRow(root = document) {
+  const sub = root.querySelector?.('#pf-sync-sub') || document.getElementById('pf-sync-sub');
+  const ico = document.getElementById('pf-sync-ico');
+  if (!sub) return;
+  const text = {
+    synced:  'Up to date across your devices',
+    syncing: 'Syncing your latest changes…',
+    offline: 'Offline — changes saved here and will sync later',
+    error:   'Sync paused — will retry automatically',
+  }[syncStatus] || 'Your tasks sync across your devices';
+  sub.textContent = text;
+  if (ico) ico.innerHTML = icon(syncStatus === 'offline' ? 'cloud-off' : 'cloud', { size: 18 });
+}
+
+async function init() {
   applyTheme(); // theme applies to the entry screens too
 
   // PWA: offline support + installability
@@ -1932,8 +2056,26 @@ function init() {
       console.warn('[sw] registration failed:', err));
   }
 
+  // Capture a password-reset return BEFORE the client may strip the URL hash.
+  const isRecovery = location.hash.includes('type=recovery');
+
+  await auth.init(); // restore session (and finish OAuth / email-link redirects)
+
+  // React to sign-out / expired sessions (cloud). OAuth + email links land
+  // via a fresh load, so they're handled by auth.init()/runEntryFlow above.
+  auth.onChange((event) => {
+    if (event === 'SIGNED_OUT' && appBooted) location.reload();
+  });
+
+  if (isRecovery && cloud) {
+    document.body.dataset.screen = 'entry';
+    document.getElementById('gate').hidden = false;
+    entry.showResetPassword();
+    return;
+  }
+
   // Decide what to show first: welcome / onboarding / the app itself.
-  entry.runEntryFlow({ onEnter: bootApp });
+  await entry.runEntryFlow({ onEnter: bootApp, loadUser: loadUserData });
 }
 
 init();
