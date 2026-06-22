@@ -1284,35 +1284,13 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 .onb-back.hidden { opacity: 0; pointer-events: none; }
 #onb-next { min-width: 132px; }
 
-/* slide entrance: the art and text arrive together WITH the slide — every
-   animation starts at t=0 with only a tiny stagger and finishes in
-   ~200-300ms, so tapping Next never feels like the content lags behind. */
-.onb-slide.in .onb-art { animation: obArtIn .28s var(--ease-out) both; }
-.onb-slide.in h2 { animation: obRise .26s var(--ease-out) both; }
-.onb-slide.in p  { animation: obRise .28s var(--ease-out) .04s both; }
-
-/* illustration entrance primitives (base rules first; delay classes after,
-   so equal-specificity delays win the cascade) */
-.onb-slide.in .pop  { animation: obPop .3s var(--ease-spring) both; }
-.onb-slide.in .rise { animation: obRise .28s var(--ease-out) both; }
-.onb-slide.in .spin { animation: obSpin .65s var(--ease-out) both; }
-.onb-slide.in .ring { animation: obRing .9s var(--ease-out) both; transform-origin: 50% 14%; }
-.onb-slide.in .grow { animation: obGrow .34s var(--ease-out) both; transform-origin: 50% 100%; }
-.onb-slide.in .il-prio i { animation: obBar .32s var(--ease-out) both; transform-origin: left center; }
-.onb-slide.in .il-row.nomatch { animation: obFilter .35s var(--ease-out) .3s both; }
-
-.onb-slide.in .d1 { animation-delay: .03s; }
-.onb-slide.in .d2 { animation-delay: .06s; }
-.onb-slide.in .d3 { animation-delay: .09s; }
-.onb-slide.in .d4 { animation-delay: .12s; }
-.onb-slide.in .d5 { animation-delay: .15s; }
-.onb-slide.in .il-prio.d1 i { animation-delay: .06s; }
-.onb-slide.in .il-prio.d2 i { animation-delay: .12s; }
-.onb-slide.in .il-prio.d3 i { animation-delay: .18s; }
-
-/* the self-drawing check (onboarding illustrations) */
-.draw path { stroke-dasharray: 1; stroke-dashoffset: 1; }
-.onb-slide.in .draw path { animation: obDraw .42s var(--ease-out) .05s both; }
+/* Every slide is fully rendered AND fully visible at all times — even while
+   it sits off-screen in the track. So navigating to a slide reveals it
+   already complete: nothing fades or "appears" with a delay when you tap
+   Next. The only motion is the track's horizontal position (see setTrack in
+   entry.js); the per-slide content has no entrance animation. */
+.draw path { stroke-dasharray: none; stroke-dashoffset: 0; } /* check shown statically */
+.il-row.nomatch { opacity: .42; } /* statically dimmed "non-match" in the search demo */
 
 /* shared illustration components */
 .il { width: 100%; display: flex; }
@@ -1434,15 +1412,6 @@ body:not([data-screen="app"]) #tabbar { display: none; }
 .il-smart .suggest-chip { margin-top: 0; }
 
 /* entry keyframes (transform/opacity only) */
-@keyframes obArtIn  { from { transform: translateY(14px) scale(.96); } to { transform: none; } }
-@keyframes obRise   { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
-@keyframes obPop    { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
-@keyframes obGrow   { from { transform: scaleY(0); } to { transform: scaleY(1); } }
-@keyframes obBar    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-@keyframes obSpin   { from { transform: rotate(0) scale(.7); } 60% { transform: rotate(300deg) scale(1.06); } to { transform: rotate(360deg) scale(1); } }
-@keyframes obRing   { 0%, 100% { transform: rotate(0); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-12deg); } 45% { transform: rotate(9deg); } 60% { transform: rotate(-6deg); } 78% { transform: rotate(3deg); } }
-@keyframes obDraw   { to { stroke-dashoffset: 0; } }
-@keyframes obFilter { to { opacity: .14; transform: scale(.94); } }
 @keyframes caret    { 50% { opacity: 0; } }
 
 /* Reduced motion: non-essential animation collapses to (near-)instant state
