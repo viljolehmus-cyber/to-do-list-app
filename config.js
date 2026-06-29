@@ -17,8 +17,8 @@
      only ever live on a server you control.
    ────────────────────────────────────────────────────────────────────── */
 
-export const SUPABASE_URL = '';      // e.g. 'https://abcd1234.supabase.co'
-export const SUPABASE_ANON_KEY = ''; // the "anon public" key (NOT service_role)
+export const SUPABASE_URL = 'https://skywnlzuyoglxaqdolys.supabase.co';
+export const SUPABASE_ANON_KEY = 'sb_publishable_1sH570Sy-Gw6V0nJS1tcPA_t3oSj2V8'; // "publishable" key — safe to ship (NOT service_role)
 
 /** True once both values look real → the app uses Supabase (cloud mode). */
 export const isConfigured = () =>
