@@ -6,27 +6,19 @@ exclusively for the phone (~390 px wide) with a native-app feel: bottom tab
 bar, bottom sheets, gradient hero cards, smooth micro-interactions, and a dark
 mode that looks just as good as the light theme.
 
-It uses **Supabase** for real authentication and a private, per-user cloud
-database, while staying a static site you can host on GitHub Pages. **→ See
-[SETUP.md](SETUP.md) to connect your backend.** Until you do, the app runs in
-**local mode** (everything on-device) so it works out of the box.
+**No accounts, no sign-up, no cloud** — everything lives in `localStorage`
+on your device. Open the app and start checking things off. The first launch
+shows a welcome screen and a 10-slide onboarding; after that you land
+straight in the app, which asks your name once so the greeting can say
+"Good evening, Jari".
 
 ## Features
 
-**Accounts & sync**
-- Real **sign up / log in** (Supabase Auth): email + password with email
-  confirmation, **forgot/reset password**, optional **Continue with Google**,
-  persistent sessions with auto token refresh
-- **Private per-user cloud database** (Supabase Postgres) protected by
-  **Row-Level Security** — every row is scoped to its owner
-- **Offline-first:** reads are instant from a local cache, writes are
-  optimistic and queued, then synced when back online — with a small
-  **sync status** indicator (synced / syncing / offline)
-- Account settings: profile (name + email), **change password**,
-  **delete account** (removes the user and all their data), export data
-- First-run **onboarding slideshow** — 10 animated feature slides, once per
-  account
-- Falls back to on-device **local mode** when Supabase isn't configured
+**Getting started**
+- **Welcome screen** with a single Get Started button — no account needed
+- First-run **onboarding slideshow** — 10 animated feature slides, shown once
+- The app starts **empty** (just an Inbox and five colorful starter
+  categories) and asks your **name** once for the greeting
 
 **Core**
 - Add, edit and delete tasks (delete & complete come with **Undo**)
@@ -64,51 +56,22 @@ database, while staying a static site you can host on GitHub Pages. **→ See
 ## File structure
 
 ```
-index.html        app shell (header, view container, tab bar, FAB, toast, #gate)
+index.html        app shell (view container, tab bar, FAB, toast, #gate)
 styles.css        design system: tokens, light/dark themes, components, entry flow
-app.js            main controller: views, sheets, actions, charts, boot/auth routing
-config.js         Supabase URL + anon key (you fill this in — see SETUP.md)
-supa.js           the single Supabase client (or null in local mode)
-auth.js           authentication — Supabase Auth (cloud) or on-device (local)
-storage.js        per-user local cache + sync queue (synchronous UI data interface)
-sync.js           cloud push/pull, offline queue flush, status, realtime
-entry.js          welcome / login / sign-up / reset + onboarding slideshow
+app.js            main controller: views, sheets, actions, charts, boot flow
+storage.js        the only module touching localStorage (tasks, settings, defaults)
+entry.js          welcome screen + first-run onboarding slideshow
 suggestions.js    rule-based smart suggestions & date helpers
 notifications.js  local reminder loop (Notification API)
 icons.js          inline SVG icon system — icon('plus') returns an SVG string
 manifest.json     PWA manifest
-sw.js             service worker: pre-cached app shell + vendored client, offline-first
-vendor/supabase.js  the vendored @supabase/supabase-js browser bundle (no CDN)
+sw.js             service worker: pre-cached app shell, offline-first
 icons/            generated PNG app icons
-SETUP.md          step-by-step backend setup (SQL, RLS, auth, deploy)
 ```
 
-## Architecture (how the backend swap works)
-
-The UI never had to change: `storage.js` stays a **synchronous local cache**
-that the views read from. In cloud mode it's hydrated from Supabase on login,
-and every write also records an op in a per-user **sync queue** that `sync.js`
-flushes to Postgres (optimistic + offline-first). `auth.js` exposes one async
-API and runs against Supabase Auth when configured, or on-device accounts when
-not. So the same code path powers both modes.
-
-## Accounts, onboarding & the dev shortcut
-
-- **Sign up / log in** are handled entirely on-device by `auth.js`. Accounts
-  (name, email, lightly-hashed password) and the current session live in
-  `localStorage`. This is a realistic *demo* of an auth flow — it is **not
-  secure** and must never be used for real credentials. The limitation is
-  documented at the top of `auth.js`.
-- **Onboarding** runs once per account. The `onboardingSeen` flag is stored
-  on the account, so returning logins go straight to the app.
-- **Dev shortcut:** the welcome screen shows a **"Skip (dev) → Demo
-  account"** button that logs into a pre-made demo account and always
-  replays the onboarding (handy for previewing it). It's gated behind
-  `const DEV_MODE = true;` at the top of `entry.js` — set it to `false`
-  (or delete the button) before a real release.
-
-Flow on launch: no user → welcome; logged-in but not onboarded → onboarding;
-logged-in and onboarded → straight into the app.
+Flow on launch: first time → welcome → slideshow → app (which asks your name
+once); afterwards → straight into the app. "Reset app" in Profile erases the
+device and brings the onboarding back.
 
 ## Run locally
 

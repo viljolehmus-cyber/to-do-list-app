@@ -1,21 +1,17 @@
 /* ==========================================================================
    entry.js — the "in front of the app" experience:
-     • Welcome / Log in / Sign up   (local demo auth via auth.js)
+     • A welcome screen with a single "Get Started" button (no accounts —
+       everything lives on this device)
      • First-run onboarding slideshow (10 animated feature slides)
-     • The flow logic that decides what to show on launch
 
-   It mounts into #gate (a full-screen layer above the app) and calls the
-   onEnter() callback to hand control to the real app once the user is in.
-   Visual language, easing and tokens are reused from styles.css so this
-   feels like part of the same app.
+   Shown only until the slideshow has been seen once (settings.onboardingSeen);
+   after that, launches go straight into the app. It mounts into #gate (a
+   full-screen layer above the app) and calls onEnter() to hand control to
+   the real app.
    ========================================================================== */
 
 import { icon } from './icons.js';
-import * as auth from './auth.js';
-import { DEV_MODE } from './config.js';
-
-/* DEV_MODE (a "Skip → Demo account" button on the welcome screen) lives in
-   config.js and is OFF by default for production. */
+import * as db from './storage.js';
 
 const EASE_OUT = 'cubic-bezier(.22, 1, .36, 1)';
 const reduce = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -24,46 +20,23 @@ const COLORS = ['#5B6CFF', '#FF4D8D', '#19C68C', '#FF9D42', '#9D6BFF', '#FFC940'
 
 let mount;       // the #gate element
 let onEnterApp;  // callback into app.js to boot the real app
-let loadUser;    // async callback: pull the signed-in user's cloud data
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /* ==========================================================================
-   Public flow entry points
+   Flow
    ========================================================================== */
 
-/**
- * Decide what to show on launch:
- *   no user             → welcome
- *   user, not onboarded → onboarding (after loading their data)
- *   user, onboarded     → straight into the app
- */
-export async function runEntryFlow({ onEnter, loadUser: lu }) {
+/** First launch → welcome + slideshow; afterwards → straight into the app. */
+export function runEntryFlow({ onEnter }) {
   onEnterApp = onEnter;
-  loadUser = lu;
   mount = document.getElementById('gate');
   mount.hidden = false;
   document.body.dataset.screen = 'entry';
 
-  if (auth.currentUser()) await enterAfterAuth();
+  if (db.getSettings().onboardingSeen) finish();
   else showWelcome();
-}
-
-/** After a successful sign-in: load the user's data, then onboard or enter. */
-async function enterAfterAuth() {
-  if (loadUser) { try { await loadUser(); } catch { /* offline → use cache */ } }
-  if (!auth.hasSeenOnboarding()) showOnboarding();
-  else finish();
-}
-
-/** Called from Settings → Log out, or on an expired session. → welcome. */
-export function goWelcome() {
-  mount = document.getElementById('gate');
-  mount.hidden = false;
-  document.body.dataset.screen = 'entry';
-  mount.innerHTML = '';
-  showWelcome();
 }
 
 /** Hand off to the app: reveal it underneath, then fade the gate away. */
@@ -79,7 +52,7 @@ function finish() {
 function teardown() { mount.innerHTML = ''; mount.hidden = true; }
 
 /* ==========================================================================
-   Screen transitions (a small navigation stack inside the gate)
+   Screen transitions (welcome → onboarding inside the gate)
    ========================================================================== */
 
 /** Build a new .gate-screen via `build(el)`, slide it in, slide old out. */
@@ -104,7 +77,7 @@ function transitionTo(build, dir = 1) {
 }
 
 /* ==========================================================================
-   Welcome screen
+   Welcome screen — one big button, no accounts
    ========================================================================== */
 
 function showWelcome() {
@@ -119,337 +92,25 @@ function showWelcome() {
         <div class="welcome-body">
           <h1 class="welcome-title">Get things done,<br><span>beautifully.</span></h1>
           <p class="welcome-sub">Plan your day, organize everything with colorful
-            categories, and build momentum — all in one calm, offline place.</p>
+            categories, and build momentum — all in one calm place.</p>
 
-          <button class="btn block" id="w-signup">${icon('sparkles', { size: 18 })}Create account</button>
-          <div class="spacer-8"></div>
-          <button class="btn ghost block" id="w-login">I already have an account</button>
+          <button class="btn gradient block" id="w-start">${icon('sparkles', { size: 18 })}Get Started</button>
 
-          ${DEV_MODE ? `
-            <button class="dev-skip" id="w-dev">
-              ${icon('zap', { size: 15 })}Skip (dev) → Demo account
-            </button>` : ''}
-
-          <p class="demo-note">${icon('shield', { size: 13 })}${auth.cloud
-            ? 'Your tasks are private to your account and sync across your devices.'
-            : 'Local mode — connect Supabase (see SETUP.md) to enable real accounts and sync.'}</p>
+          <p class="demo-note">${icon('shield', { size: 13 })}No account needed — your tasks
+            stay private on this device.</p>
         </div>
       </div>`;
 
-    el.querySelector('#w-signup').addEventListener('click', () => showSignup());
-    el.querySelector('#w-login').addEventListener('click', () => showLogin());
-    el.querySelector('#w-dev')?.addEventListener('click', async (e) => {
-      // DEV-ONLY: sign into the demo account, then preview onboarding.
-      const btn = e.currentTarget;
-      busy(btn, true);
-      const res = await auth.loginDemo();
-      busy(btn, false);
-      if (res.ok) showOnboarding();
-    });
+    el.querySelector('#w-start').addEventListener('click', () => showOnboarding());
   }, -1);
 }
-
-/* ==========================================================================
-   Auth forms (log in / sign up) — shared building blocks
-   ========================================================================== */
-
-function field(name, label, { type = 'text', ic, placeholder = '', autocomplete = '' } = {}) {
-  const isPw = type === 'password';
-  return `
-    <div class="field">
-      <label class="field-label" for="af-${name}">${label}</label>
-      <div class="input-wrap" data-field="${name}">
-        ${ic ? icon(ic, { size: 18, cls: 'field-ico' }) : ''}
-        <input id="af-${name}" name="${name}" type="${type}" placeholder="${esc(placeholder)}"
-               autocomplete="${autocomplete}" autocapitalize="none" spellcheck="false">
-        ${isPw ? `<button type="button" class="pw-toggle" data-toggle="${name}"
-                   aria-label="Show password">${icon('eye', { size: 18 })}</button>` : ''}
-      </div>
-      <span class="field-error" data-error="${name}" hidden></span>
-    </div>`;
-}
-
-function wireForm(scope) {
-  // password visibility toggles
-  scope.querySelectorAll('.pw-toggle').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const input = scope.querySelector(`#af-${btn.dataset.toggle}`);
-      const show = input.type === 'password';
-      input.type = show ? 'text' : 'password';
-      btn.innerHTML = icon(show ? 'eye-off' : 'eye', { size: 18 });
-      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
-    });
-  });
-  // clear a field's error (and any form-level error) as soon as the user edits
-  scope.querySelectorAll('input').forEach((input) => {
-    input.addEventListener('input', () => {
-      clearError(scope, input.name);
-      const fe = scope.querySelector('[data-error="form"]');
-      if (fe) fe.hidden = true;
-    });
-  });
-}
-
-function showError(scope, field, msg) {
-  const wrap = scope.querySelector(`[data-field="${field}"]`);
-  const err = scope.querySelector(`[data-error="${field}"]`);
-  wrap?.classList.add('input-error');
-  if (err) { err.textContent = msg; err.hidden = false; }
-  const input = wrap?.querySelector('input');
-  if (input) { input.focus(); shake(wrap); }
-}
-
-function clearError(scope, field) {
-  scope.querySelector(`[data-field="${field}"]`)?.classList.remove('input-error');
-  const err = scope.querySelector(`[data-error="${field}"]`);
-  if (err) err.hidden = true;
-}
-
-function shake(el) {
-  if (reduce()) return;
-  el.animate(
-    [{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' },
-     { transform: 'translateX(5px)' }, { transform: 'translateX(-3px)' }, { transform: 'translateX(0)' }],
-    { duration: 320, easing: 'ease-in-out' },
-  );
-}
-
-function authHeader(title, sub) {
-  return `
-    <div class="gate-head">
-      <button class="gate-back" id="af-back" aria-label="Back">${icon('arrow-left', { size: 20 })}</button>
-    </div>
-    <div class="auth-intro">
-      <h1 class="gate-title">${esc(title)}</h1>
-      <p class="auth-sub">${esc(sub)}</p>
-    </div>`;
-}
-
-/** A form-level error slot (network errors, OAuth issues, etc.). */
-const formError = () => `<div class="field-error form-error" data-error="form" hidden></div>`;
-
-/** Disable a button and show a spinner while an async action runs. */
-function busy(btn, on) {
-  if (!btn) return;
-  if (on) {
-    btn.disabled = true;
-    btn.dataset.label = btn.innerHTML;
-    btn.innerHTML = `<span class="btn-spinner"></span>`;
-  } else {
-    btn.disabled = false;
-    if (btn.dataset.label) btn.innerHTML = btn.dataset.label;
-  }
-}
-
-const googleMark = () => `<svg class="gicon" viewBox="0 0 48 48" aria-hidden="true">
-  <path fill="#FFC107" d="M43.6 20.5h-1.9V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.3-.4-3.5z"/>
-  <path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 16 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
-  <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.6l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
-  <path fill="#1976D2" d="M43.6 20.5H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.6l6.2 5.2C41.4 36.5 44 30.8 44 24c0-1.3-.1-2.3-.4-3.5z"/>
-</svg>`;
-
-const appleMark = () => `<svg class="gicon" viewBox="0 0 24 24" aria-hidden="true">
-  <path fill="currentColor" d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
-</svg>`;
-
-/** "Continue with Apple / Google" + an "or" divider — cloud mode only.
-    OAuth errors show in their own slot right under these buttons. */
-const oauthBlock = () => auth.cloud ? `
-  <button type="button" class="btn ghost block" id="af-apple">${appleMark()}Continue with Apple</button>
-  <div class="spacer-8"></div>
-  <button type="button" class="btn ghost block" id="af-google">${googleMark()}Continue with Google</button>
-  <div class="field-error form-error" data-error="oauth" hidden></div>
-  <div class="auth-or"><span>or</span></div>` : '';
-
-/** Wires both OAuth buttons inside an auth screen. */
-function wireOAuth(el) {
-  const slot = () => el.querySelector('[data-error="oauth"]');
-  const hook = (sel, fn) => el.querySelector(sel)?.addEventListener('click', (e) => {
-    const btn = e.currentTarget;
-    const s = slot();
-    if (s) s.hidden = true; // clear a previous OAuth error
-    busy(btn, true);
-    fn().then((r) => {
-      if (!r.ok) {
-        busy(btn, false);
-        // always surface OAuth errors right under the provider buttons
-        if (s) { s.textContent = r.error; s.hidden = false; shake(s); }
-        else showError(el, r.field, r.error);
-      }
-      // on success the browser redirects to the provider
-    });
-  });
-  hook('#af-google', auth.signInWithGoogle);
-  hook('#af-apple', auth.signInWithApple);
-}
-
-/* ---------- Log in ---------- */
-
-function showLogin() {
-  transitionTo((el) => {
-    el.innerHTML = `
-      <div class="auth">
-        ${authHeader('Welcome back', 'Log in to pick up where you left off.')}
-        ${oauthBlock()}
-        <form id="af-form" novalidate>
-          ${field('email', 'Email', { type: 'email', ic: 'mail', placeholder: 'you@example.com', autocomplete: 'email' })}
-          ${field('password', 'Password', { type: 'password', ic: 'lock', placeholder: '••••••••', autocomplete: 'current-password' })}
-          <div class="auth-row"><button type="button" id="af-forgot">Forgot password?</button></div>
-          ${formError()}
-          <button class="btn block" type="submit">${icon('arrow-right', { size: 18 })}Log in</button>
-        </form>
-        <p class="auth-alt">New to Taskly? <button id="af-switch">Create an account</button></p>
-      </div>`;
-
-    wireForm(el);
-    el.querySelector('#af-back').addEventListener('click', () => showWelcome());
-    el.querySelector('#af-switch').addEventListener('click', () => showSignup());
-    el.querySelector('#af-forgot').addEventListener('click', () => showForgot(el.querySelector('#af-email')?.value));
-    wireOAuth(el);
-    el.querySelector('#af-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = e.target.querySelector('button[type="submit"]');
-      busy(btn, true);
-      const res = await auth.signIn(formData(el));
-      if (!res.ok) { busy(btn, false); return showError(el, res.field, res.error); }
-      await enterAfterAuth(); // load data, then onboarding-or-app
-    });
-  }, 1);
-}
-
-/* ---------- Sign up ---------- */
-
-function showSignup() {
-  transitionTo((el) => {
-    el.innerHTML = `
-      <div class="auth">
-        ${authHeader('Create your account', 'A name and a password — that’s all you need.')}
-        ${oauthBlock()}
-        <form id="af-form" novalidate>
-          ${field('name', 'Name', { ic: 'user', placeholder: 'Your name', autocomplete: 'name' })}
-          ${field('email', 'Email', { type: 'email', ic: 'mail', placeholder: 'you@example.com', autocomplete: 'email' })}
-          ${field('password', 'Password', { type: 'password', ic: 'lock', placeholder: 'At least 6 characters', autocomplete: 'new-password' })}
-          ${field('confirm', 'Confirm password', { type: 'password', ic: 'lock', placeholder: 'Repeat your password', autocomplete: 'new-password' })}
-          ${formError()}
-          <button class="btn block" type="submit">${icon('sparkles', { size: 18 })}Create account</button>
-        </form>
-        <p class="auth-alt">Already have an account? <button id="af-switch">Log in</button></p>
-      </div>`;
-
-    wireForm(el);
-    el.querySelector('#af-back').addEventListener('click', () => showWelcome());
-    el.querySelector('#af-switch').addEventListener('click', () => showLogin());
-    wireOAuth(el);
-    el.querySelector('#af-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = e.target.querySelector('button[type="submit"]');
-      busy(btn, true);
-      const res = await auth.signUp(formData(el));
-      if (!res.ok) { busy(btn, false); return showError(el, res.field, res.error); }
-      if (res.needsConfirmation) return showConfirmEmail(res.email); // verify email first
-      await enterAfterAuth(); // confirmation disabled → straight in
-    });
-  }, 1);
-}
-
-function formData(scope) {
-  const get = (n) => scope.querySelector(`#af-${n}`)?.value ?? '';
-  return { name: get('name'), email: get('email'), password: get('password'), confirm: get('confirm') };
-}
-
-/* ---------- forgot / reset / confirm screens ---------- */
-
-function showForgot(prefill = '') {
-  transitionTo((el) => {
-    el.innerHTML = `
-      <div class="auth">
-        ${authHeader('Reset password', 'We’ll email you a link to set a new password.')}
-        <form id="af-form" novalidate>
-          ${field('email', 'Email', { type: 'email', ic: 'mail', placeholder: 'you@example.com', autocomplete: 'email' })}
-          ${formError()}
-          <button class="btn block" type="submit">${icon('mail', { size: 18 })}Send reset link</button>
-        </form>
-        <p class="auth-alt"><button id="af-switch">Back to log in</button></p>
-      </div>`;
-    wireForm(el);
-    if (prefill) el.querySelector('#af-email').value = prefill;
-    el.querySelector('#af-back').addEventListener('click', () => showLogin());
-    el.querySelector('#af-switch').addEventListener('click', () => showLogin());
-    el.querySelector('#af-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = e.target.querySelector('button[type="submit"]');
-      busy(btn, true);
-      const res = await auth.resetPassword(el.querySelector('#af-email').value);
-      busy(btn, false);
-      if (!res.ok) return showError(el, res.field, res.error);
-      showInfo('Check your inbox', 'If an account exists for that email, a password-reset link is on its way.', 'Back to log in', showLogin);
-    });
-  }, 1);
-}
-
-/** Shown when the user returns from a password-reset email link. */
-export function showResetPassword() {
-  mount = document.getElementById('gate');
-  mount.hidden = false;
-  document.body.dataset.screen = 'entry';
-  transitionTo((el) => {
-    el.innerHTML = `
-      <div class="auth">
-        <div class="auth-intro" style="margin-top:max(28px,env(safe-area-inset-top))">
-          <h1 class="gate-title">Set a new password</h1>
-          <p class="auth-sub">Choose a new password for your account.</p>
-        </div>
-        <form id="af-form" novalidate>
-          ${field('password', 'New password', { type: 'password', ic: 'lock', placeholder: 'At least 6 characters', autocomplete: 'new-password' })}
-          ${formError()}
-          <button class="btn block" type="submit">${icon('check', { size: 18 })}Update password</button>
-        </form>
-      </div>`;
-    wireForm(el);
-    el.querySelector('#af-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const btn = e.target.querySelector('button[type="submit"]');
-      busy(btn, true);
-      const res = await auth.updatePassword(el.querySelector('#af-password').value);
-      busy(btn, false);
-      if (!res.ok) return showError(el, res.field, res.error);
-      // strip the recovery hash, then continue into the app
-      history.replaceState(null, '', redirectClean());
-      await enterAfterAuth();
-    });
-  }, 1);
-}
-
-function showConfirmEmail(email) {
-  showInfo('Confirm your email',
-    `We sent a confirmation link to ${email}. Tap it to activate your account, then come back and log in.`,
-    'Back to log in', showLogin, 'mail');
-}
-
-/** Generic centered info screen (email sent / confirm email). */
-function showInfo(title, body, cta, onCta, ic = 'check-circle') {
-  transitionTo((el) => {
-    el.innerHTML = `
-      <div class="auth auth-info">
-        <div class="info-ring">${icon(ic, { size: 30 })}</div>
-        <h1 class="gate-title">${esc(title)}</h1>
-        <p class="auth-sub">${esc(body)}</p>
-        <div class="spacer-16"></div>
-        <button class="btn block" id="af-cta">${esc(cta)}</button>
-      </div>`;
-    el.querySelector('#af-cta').addEventListener('click', () => onCta());
-  }, 1);
-}
-
-const redirectClean = () => window.location.origin + window.location.pathname + window.location.search;
 
 /* ==========================================================================
    Onboarding slideshow
    ========================================================================== */
 
 /* Small illustration helpers, built from the same components as the app
-   (cards, pills, meta-chips, progress bars) so they look native. The CSS
-   replays each slide's animations whenever it becomes active (.in). */
+   (cards, pills, meta-chips, progress bars) so they look native. */
 
 const drawCheck = (size = 30) => `
   <svg class="draw" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none"
@@ -648,7 +309,7 @@ function showOnboarding() {
     }
 
     function done() {
-      auth.setOnboardingSeen();
+      db.saveSettings({ onboardingSeen: true });
       finish();
     }
 
