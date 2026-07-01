@@ -111,17 +111,33 @@ alter publication supabase_realtime add table public.categories;
    link before they can log in — Taskly shows a "Confirm your email" screen
    for this.
 
-## 4. (Optional) Continue with Google
+## 4. (Optional) Continue with Google / Apple
 
-1. **Authentication → Providers → Google** → enable it.
-2. Create an OAuth client in the Google Cloud console and paste the **Client
-   ID / Secret** into Supabase.
-3. In Google, add Supabase's callback URL (shown on that Supabase page,
-   `https://<your-project>.supabase.co/auth/v1/callback`) as an authorized
-   redirect URI.
+The "Continue with Google" and "Continue with Apple" buttons appear
+automatically once Supabase is configured. Each provider also needs to be
+enabled server-side (until then, tapping its button shows a friendly
+"not enabled yet" message):
 
-The "Continue with Google" button appears automatically once Supabase is
-configured.
+**Google (free):**
+1. In the [Google Cloud console](https://console.cloud.google.com) create an
+   **OAuth client ID** (type: *Web application*).
+2. Add Supabase's callback URL as an **authorized redirect URI**:
+   `https://<your-project>.supabase.co/auth/v1/callback`
+3. **Supabase → Authentication → Sign In / Providers → Google** → enable it
+   and paste the **Client ID / Secret**.
+
+**Apple (requires a paid Apple Developer Program membership, ~99 $/year):**
+1. In the [Apple Developer portal](https://developer.apple.com/account):
+   create an **App ID** with *Sign in with Apple* enabled, then a
+   **Services ID** (this becomes the client ID) whose *Return URL* is the
+   same Supabase callback URL as above, plus a **Sign in with Apple key**
+   (`.p8`).
+2. **Supabase → Authentication → Sign In / Providers → Apple** → enable it
+   and fill in the Services ID, Team ID, Key ID and the key — the Supabase
+   docs on that page walk through generating the client secret.
+
+If you don't have an Apple Developer account, simply leave Apple disabled —
+email + Google still work.
 
 ## 5. Allow your site as a redirect URL
 

@@ -17,7 +17,7 @@
 
 import { sb, cloud } from './supa.js';
 import * as db from './storage.js';
-import { DEMO_EMAIL, DEMO_PASSWORD } from './config.js';
+import { DEMO_EMAIL, DEMO_PASSWORD, SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
 export { cloud };
 
@@ -133,17 +133,36 @@ export async function signIn({ email, password }) {
 }
 export const logIn = signIn; // backwards-compatible alias
 
-export async function signInWithGoogle() {
-  if (!cloud) return fail('form', 'Google sign-in needs the cloud backend (see SETUP.md).');
+/** OAuth sign-in (Google / Apple). The browser redirects away on success. */
+export async function signInWithProvider(provider) {
+  if (!cloud) return fail('form', 'Social sign-in needs the cloud backend (see SETUP.md).');
   try {
+    // Pre-check whether the provider is actually enabled server-side, so a
+    // not-yet-configured button shows a friendly inline error instead of
+    // redirecting to a raw Supabase error page. Skipped silently if the
+    // settings endpoint is unreachable (we then just let the redirect try).
+    try {
+      // apikey as a query param keeps this a "simple" GET (no CORS preflight)
+      const res = await fetch(`${SUPABASE_URL.trim().replace(/\/$/, '')}/auth/v1/settings?apikey=${encodeURIComponent(SUPABASE_ANON_KEY.trim())}`);
+      if (res.ok) {
+        const s = await res.json();
+        if (s.external && s.external[provider] === false) {
+          const pretty = provider === 'apple' ? 'Apple' : provider === 'google' ? 'Google' : provider;
+          return fail('form', `${pretty} sign-in isn’t enabled yet (see SETUP.md).`);
+        }
+      }
+    } catch { /* offline / blocked — fall through to the normal flow */ }
+
     const { error } = await sb.auth.signInWithOAuth({
-      provider: 'google',
+      provider,
       options: { redirectTo: redirectURL() },
     });
     if (error) return mapError(error);
     return { ok: true }; // browser redirects away
   } catch { return netError(); }
 }
+export const signInWithGoogle = () => signInWithProvider('google');
+export const signInWithApple = () => signInWithProvider('apple');
 
 /* ---------- password reset / change ---------- */
 
@@ -241,6 +260,7 @@ function mapError(error) {
   if (m.includes('password should be')) return fail('password', 'Use at least 6 characters.');
   if (m.includes('rate limit') || m.includes('too many')) return fail('form', 'Too many attempts. Please wait a moment and try again.');
   if (m.includes('redirect')) return fail('form', 'This site isn’t an allowed redirect URL yet (see SETUP.md).');
+  if (m.includes('provider is not enabled') || m.includes('unsupported provider')) return fail('form', 'This sign-in method isn’t enabled yet (see SETUP.md).');
   return fail('form', error?.message || 'Something went wrong. Please try again.');
 }
 function netError() { return fail('form', 'Network error — check your connection and try again.'); }
